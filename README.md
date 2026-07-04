@@ -29,18 +29,23 @@ the `amount_token` is a group addition:
 amount_token = authority_key + previous_participant_key + subject_key
 ```
 
-Each party receives the same common challenge:
+The block also stores a derived amount token for each role:
 
 ```text
-common_challenge = amount_token
+amount_token_subject = amount_token_group + amount * subject_key
+amount_token_witness = amount_token_group + amount * witness_key
+amount_token_participant = amount_token_group + amount * participant_key
 ```
 
-Then each party signs that challenge:
+These are public group keys. They prove the block used the same amount
+duplication count for each role key.
+
+Each party signs its own role amount token:
 
 ```text
-subject_signature = sign(subject_key, amount_token)
-witness_signature = sign(witness_key, amount_token)
-participant_signature = sign(participant_key, amount_token)
+subject_signature = sign(subject_key, amount_token_subject)
+witness_signature = sign(witness_key, amount_token_witness)
+participant_signature = sign(participant_key, amount_token_participant)
 ```
 
 The submitted `amount_proof_key` is the aggregate of those signatures:
@@ -58,23 +63,10 @@ amount_proof_key_authority_signature =
   sign(authority_key, "authorize phi-crypto amount proof key {amount_proof_key}")
 ```
 
-Block verification recomputes the aggregate, checks that the submitted
-`amount_proof_key` matches it, checks that each party actually signed the block
-`amount_token`, and verifies the authority signature over the resulting
-`amount_proof_key`.
-
-## Role Amount Keys
-
-The block also stores a derived amount token for each role:
-
-```text
-amount_token_subject = amount_token_group + amount * subject_key
-amount_token_witness = amount_token_group + amount * witness_key
-amount_token_participant = amount_token_group + amount * participant_key
-```
-
-These are public group keys. They prove the block used the same amount
-duplication count for each role key.
+Block verification recomputes the role amount tokens, checks that each party
+signed the correct role token, checks that the submitted `amount_proof_key`
+matches the aggregate signatures, and verifies the authority signature over the
+resulting `amount_proof_key`.
 
 ## Can Two Parties Deduce The Third DID?
 
@@ -100,13 +92,26 @@ and accepted the aggregate amount proof key, but it does not make the aggregate
 reversible into the hidden party's DID.
 
 What two parties can do is verify a candidate DID if someone presents one. Given
-the candidate DID, the common challenge, and the candidate signature, they can
-check whether the candidate verifies against the aggregate protocol.
+the candidate DID, the role-specific challenge, and the candidate signature,
+they can check whether the candidate verifies against the aggregate protocol.
 
 So the distinction is:
 
 - Derivation: not possible from the aggregate proof alone.
 - Candidate verification: possible when a candidate DID/signature is supplied.
+
+To verify a known candidate third DID, two parties check the candidate against
+the public block result:
+
+```text
+candidate_signature verifies candidate_did over candidate_role_amount_token
+candidate_signature + known_signature_1 + known_signature_2 == amount_proof_key
+amount_proof_key_authority_signature verifies authority approval of amount_proof_key
+```
+
+In other words, the candidate DID is accepted only if its signature verifies the
+candidate role amount token and the three signatures aggregate back to the
+block's `amount_proof_key`.
 
 This means the protocol can prove participation by known DIDs, but it is not a
 DID discovery mechanism.

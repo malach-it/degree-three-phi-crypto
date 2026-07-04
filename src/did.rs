@@ -404,9 +404,15 @@ impl DidKeyBlock {
 
     pub fn verify_amount_proof_challenges(&self) -> Result<(), OwnershipProofError> {
         for record in &self.records {
-            if record.proof.challenge != self.amount_token {
+            let expected = match record.role {
+                DidRole::Subject => &self.amount_tokens.subject,
+                DidRole::Witness => &self.amount_tokens.witness,
+                DidRole::Participant => &self.amount_tokens.participant,
+            };
+
+            if &record.proof.challenge != expected {
                 return Err(OwnershipProofError::AmountProofChallengeDoesNotMatch {
-                    expected: self.amount_token.clone(),
+                    expected: expected.clone(),
                     actual: record.proof.challenge.clone(),
                 });
             }

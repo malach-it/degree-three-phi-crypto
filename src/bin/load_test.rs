@@ -11,7 +11,7 @@ use blst::min_pk::SecretKey;
 use did::{
     BLS_SIGNATURE_DST, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
     amount_authority_challenge, amount_proof_key_for_records, amount_token_for_block,
-    did_key_from_bls12_381_public_key, verify_did_key_ownership,
+    amount_tokens_for_records, did_key_from_bls12_381_public_key, verify_did_key_ownership,
 };
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -155,7 +155,13 @@ fn run_worker(
             &amount_authority_signature,
             amount_authority_did_key,
         );
-        let submissions = exchange_submissions(&exchange, &amount_token);
+        let amount_token_group =
+            amount_token_group_for_exchange(&amount_token, amount_authority_did_key);
+        let records = exchange_records_without_proofs(&exchange);
+        let amount_tokens =
+            amount_tokens_for_records(&records, exchange.amount, &amount_token_group)
+                .expect("load-test amount tokens should compute");
+        let submissions = exchange_submissions(&exchange, &amount_tokens);
         let amount_proof_key = amount_proof_key_for_submissions(&submissions);
 
         match blockchain.add_public_key_block(submissions, exchange.amount, amount_proof_key) {
@@ -273,7 +279,8 @@ fn two_party_third_check_result(
     let Some(target_record) = record_for_role(did_block, target_role) else {
         return ThirdPartyCheckResult::failed();
     };
-    let challenge_matches_block = target_record.proof.challenge == did_block.amount_token;
+    let challenge_matches_block = target_record.proof.challenge
+        == amount_token_for_role(&did_block.amount_tokens, target_role);
     let target_signature_valid =
         verify_did_key_ownership(&target_record.did_key, &target_record.proof).is_ok();
     let block_result_matches = amount_proof_key_for_records(&did_block.records)
@@ -398,7 +405,18 @@ fn amount_token_for_exchange(
     .expect("load-test amount token should compute")
 }
 
-fn exchange_submissions(exchange: &Exchange<'_>, amount_token: &str) -> Vec<DidKeySubmission> {
+fn amount_token_group_for_exchange(amount_token: &str, amount_authority_did_key: &str) -> String {
+    if amount_token.starts_with("did:key:") {
+        amount_token.to_string()
+    } else {
+        amount_authority_did_key.to_string()
+    }
+}
+
+fn exchange_submissions(
+    exchange: &Exchange<'_>,
+    amount_tokens: &did::AmountTokens,
+) -> Vec<DidKeySubmission> {
     [
         (exchange.subject, DidRole::Subject),
         (exchange.witness, DidRole::Witness),
@@ -406,17 +424,26 @@ fn exchange_submissions(exchange: &Exchange<'_>, amount_token: &str) -> Vec<DidK
     ]
     .into_iter()
     .map(|(party, role)| {
+        let challenge = amount_token_for_role(amount_tokens, role);
         let signature = party
             .signing_key
-            .sign(amount_token.as_bytes(), BLS_SIGNATURE_DST, &[]);
+            .sign(challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
 
         DidKeySubmission::with_role(
             party.did_key.clone(),
             role,
-            OwnershipProof::new(amount_token, base64url(&signature.compress())),
+            OwnershipProof::new(challenge, base64url(&signature.compress())),
         )
     })
     .collect()
+}
+
+fn amount_token_for_role(amount_tokens: &did::AmountTokens, role: DidRole) -> &str {
+    match role {
+        DidRole::Subject => &amount_tokens.subject,
+        DidRole::Witness => &amount_tokens.witness,
+        DidRole::Participant => &amount_tokens.participant,
+    }
 }
 
 fn exchange_records_without_proofs(exchange: &Exchange<'_>) -> Vec<DidKeyRecord> {

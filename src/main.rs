@@ -6,9 +6,10 @@ use block::{Block, BlockData};
 use blockchain::Blockchain;
 use blst::min_pk::SecretKey;
 use did::{
-    BLS_SIGNATURE_DST, DidKeyBlock, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
-    amount_authority_challenge, amount_proof_key_for_records, amount_token_for_block,
-    did_key_from_bls12_381_public_key, verify_did_key_ownership,
+    AmountTokens, BLS_SIGNATURE_DST, DidKeyBlock, DidKeyRecord, DidKeySubmission, DidRole,
+    OwnershipProof, amount_authority_challenge, amount_proof_key_for_records,
+    amount_token_for_block, amount_tokens_for_records, did_key_from_bls12_381_public_key,
+    verify_did_key_ownership,
 };
 
 const DEFAULT_DIFFICULTY_BITS: u8 = 16;
@@ -34,6 +35,7 @@ fn main() {
         first_signing_keys,
         first_amount,
         first_amount_token,
+        &amount_authority,
     );
 
     let second_amount =
@@ -46,6 +48,7 @@ fn main() {
         second_signing_keys,
         second_amount,
         second_amount_token,
+        &amount_authority,
     );
 
     let mut previous_participant: Option<String> = None;
@@ -110,20 +113,12 @@ fn print_operations(
     let witness = did_key_for_role(did_block, DidRole::Witness).expect("block has a witness");
     let participant =
         did_key_for_role(did_block, DidRole::Participant).expect("block has a participant");
-    let common_challenge = did_block
-        .records
-        .first()
-        .map(|record| record.proof.challenge.as_str())
-        .expect("block has DID records");
-
     if previous_participant_did_key == Some(subject) {
         println!("  operation amount_token = previous_participant_amount_token");
     } else {
         println!("  operation amount_token = authority_signature");
     }
 
-    println!("  operation common_challenge = amount_token");
-    println!("  operation common_challenge_value = \"{common_challenge}\"");
     println!(
         "  operation subject computes amount_token_subject = amount_token_group + {} * subject_key",
         did_block.amount
@@ -136,6 +131,9 @@ fn print_operations(
         "  operation participant computes amount_token_participant = amount_token_group + {} * participant_key",
         did_block.amount
     );
+    println!("  operation subject_challenge = amount_token_subject");
+    println!("  operation witness_challenge = amount_token_witness");
+    println!("  operation participant_challenge = amount_token_participant");
     println!(
         "  operation return amount_proof_key = aggregate_signature(subject_signature, witness_signature, participant_signature)"
     );
@@ -147,7 +145,7 @@ fn print_operations(
 
     for record in &did_block.records {
         println!(
-            "  operation {} signs common_challenge = verify_signature({}, \"{}\", {})",
+            "  operation {} signs role_challenge = verify_signature({}, \"{}\", {})",
             record.role.as_str(),
             record.did_key,
             record.proof.challenge,
@@ -167,7 +165,8 @@ fn print_two_party_block_result_verifications(did_block: &DidKeyBlock) {
             .collect::<Vec<_>>()
             .join("+");
         let target_record = record_for_role(did_block, target_role).expect("block has target role");
-        let challenge_matches_block = target_record.proof.challenge == did_block.amount_token;
+        let expected_challenge = amount_token_for_role(&did_block.amount_tokens, target_role);
+        let challenge_matches_block = target_record.proof.challenge == expected_challenge;
         let target_signature_valid =
             verify_did_key_ownership(&target_record.did_key, &target_record.proof).is_ok();
         let block_result_matches = amount_proof_key_for_records(&did_block.records)
@@ -223,7 +222,12 @@ fn add_demo_public_key_block(
     signing_keys: [SecretKey; 3],
     amount: u8,
     amount_token: String,
+    amount_authority_did_key: &str,
 ) {
+    let records = records_without_proofs(&signing_keys);
+    let amount_token_group = amount_token_group_for_demo(&amount_token, amount_authority_did_key);
+    let amount_tokens = amount_tokens_for_records(&records, amount, &amount_token_group)
+        .expect("demo amount tokens should compute");
     let submissions = signing_keys
         .iter()
         .enumerate()
@@ -233,7 +237,11 @@ fn add_demo_public_key_block(
                 1 => DidRole::Witness,
                 _ => DidRole::Participant,
             };
-            did_submission_for_key_with_challenge(signing_key, role, &amount_token)
+            did_submission_for_key_with_challenge(
+                signing_key,
+                role,
+                amount_token_for_role(&amount_tokens, role),
+            )
         })
         .collect::<Vec<_>>();
     let amount_proof_key = amount_proof_key_for_submissions(&submissions);
@@ -241,6 +249,41 @@ fn add_demo_public_key_block(
     blockchain
         .add_public_key_block(submissions, amount, amount_proof_key)
         .expect("public key ownership proofs should verify");
+}
+
+fn records_without_proofs(signing_keys: &[SecretKey; 3]) -> Vec<DidKeyRecord> {
+    signing_keys
+        .iter()
+        .enumerate()
+        .map(|(index, signing_key)| {
+            let role = match index {
+                0 => DidRole::Subject,
+                1 => DidRole::Witness,
+                _ => DidRole::Participant,
+            };
+            DidKeyRecord::new(
+                did_key_for_secret_key(signing_key),
+                role,
+                OwnershipProof::new("", ""),
+            )
+        })
+        .collect()
+}
+
+fn amount_token_group_for_demo(amount_token: &str, amount_authority_did_key: &str) -> String {
+    if amount_token.starts_with("did:key:") {
+        amount_token.to_string()
+    } else {
+        amount_authority_did_key.to_string()
+    }
+}
+
+fn amount_token_for_role(amount_tokens: &AmountTokens, role: DidRole) -> &str {
+    match role {
+        DidRole::Subject => &amount_tokens.subject,
+        DidRole::Witness => &amount_tokens.witness,
+        DidRole::Participant => &amount_tokens.participant,
+    }
 }
 
 #[cfg(test)]
@@ -829,8 +872,36 @@ mod tests {
             amount,
             amount_authority_signature,
         );
+        let amount_token_group =
+            amount_token_group_for_demo(&amount_token, &test_amount_authority_did_key());
+        let records = test_records_without_proofs(key_bytes);
+        let amount_tokens = amount_tokens_for_records(&records, amount, &amount_token_group)
+            .expect("test amount tokens should compute");
 
-        test_submissions_with_challenge(key_bytes, &amount_token)
+        test_submissions_with_amount_tokens(key_bytes, &amount_tokens)
+    }
+
+    fn test_submissions_with_amount_tokens(
+        key_bytes: [u8; 3],
+        amount_tokens: &AmountTokens,
+    ) -> Vec<DidKeySubmission> {
+        key_bytes
+            .into_iter()
+            .enumerate()
+            .map(|(index, byte)| {
+                let signing_key = bls_secret_key(byte);
+                let role = match index {
+                    0 => DidRole::Subject,
+                    1 => DidRole::Witness,
+                    _ => DidRole::Participant,
+                };
+                did_submission_for_key_with_challenge(
+                    &signing_key,
+                    role,
+                    amount_token_for_role(amount_tokens, role),
+                )
+            })
+            .collect()
     }
 
     fn test_submissions_with_challenge(
