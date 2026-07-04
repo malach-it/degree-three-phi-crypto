@@ -18,15 +18,39 @@ fn main() {
     let amount_authority = did_key_for_secret_key(&amount_authority_key);
     let mut blockchain = Blockchain::new(DEFAULT_DIFFICULTY_BITS, amount_authority_key.clone());
 
-    add_demo_public_key_block(
-        &mut blockchain,
-        &amount_authority_key,
-        [bls_secret_key(7), bls_secret_key(8), bls_secret_key(9)],
+    let amount = 7;
+    let first_signing_keys = [bls_secret_key(7), bls_secret_key(8), bls_secret_key(9)];
+    let first_amount_authority_proof = amount_authority_proof(&amount_authority_key, amount);
+    let first_amount_key = amount_key_for_demo_block(
+        &blockchain,
+        &first_signing_keys,
+        amount,
+        &first_amount_authority_proof,
+        &amount_authority,
     );
     add_demo_public_key_block(
         &mut blockchain,
-        &amount_authority_key,
-        [bls_secret_key(9), bls_secret_key(11), bls_secret_key(12)],
+        first_signing_keys,
+        amount,
+        first_amount_authority_proof,
+        first_amount_key,
+    );
+
+    let second_signing_keys = [bls_secret_key(9), bls_secret_key(11), bls_secret_key(12)];
+    let second_amount_authority_proof = amount_authority_proof(&amount_authority_key, amount);
+    let second_amount_key = amount_key_for_demo_block(
+        &blockchain,
+        &second_signing_keys,
+        amount,
+        &second_amount_authority_proof,
+        &amount_authority,
+    );
+    add_demo_public_key_block(
+        &mut blockchain,
+        second_signing_keys,
+        amount,
+        second_amount_authority_proof,
+        second_amount_key,
     );
 
     let mut previous_participant: Option<String> = None;
@@ -147,19 +171,11 @@ fn did_key_for_role(did_block: &DidKeyBlock, role: DidRole) -> Option<&String> {
 
 fn add_demo_public_key_block(
     blockchain: &mut Blockchain,
-    amount_authority_key: &SecretKey,
     signing_keys: [SecretKey; 3],
+    amount: u8,
+    amount_authority_proof: OwnershipProof,
+    amount_key: String,
 ) {
-    let amount = 7;
-    let amount_authority_proof = amount_authority_proof(amount_authority_key, amount);
-    let amount_authority_did_key = did_key_for_secret_key(amount_authority_key);
-    let amount_key = amount_key_for_demo_block(
-        blockchain,
-        &signing_keys,
-        amount,
-        &amount_authority_proof,
-        &amount_authority_did_key,
-    );
     let submissions = signing_keys
         .iter()
         .enumerate()

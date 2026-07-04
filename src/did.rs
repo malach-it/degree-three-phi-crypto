@@ -110,10 +110,6 @@ pub enum OwnershipProofError {
         expected: String,
         actual: String,
     },
-    AmountAuthorityChallengeDoesNotMatch {
-        expected: String,
-        actual: String,
-    },
     InvalidSignature(BLST_ERROR),
 }
 
@@ -186,12 +182,6 @@ impl fmt::Display for OwnershipProofError {
                     "amount proof key authority challenge mismatch: expected {expected}, got {actual}"
                 )
             }
-            Self::AmountAuthorityChallengeDoesNotMatch { expected, actual } => {
-                write!(
-                    f,
-                    "amount authority challenge mismatch: expected {expected}, got {actual}"
-                )
-            }
             Self::InvalidSignature(error) => {
                 write!(f, "signature does not match challenge: {error:?}")
             }
@@ -249,7 +239,6 @@ impl DidKeyBlock {
         let authority_did_key =
             did_key_from_bls12_381_public_key(&authority_signing_key.sk_to_pk().compress());
         validate_amount(amount)?;
-        verify_amount_authority_proof(amount, &authority_did_key, &amount_authority_proof)?;
         let amount_key = amount_key_for_block(
             &records,
             amount,
@@ -698,23 +687,6 @@ fn sign_amount_proof_key_authority_proof(
     let signature = signing_key.sign(challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
 
     OwnershipProof::new(challenge, base64url(&signature.compress()))
-}
-
-fn verify_amount_authority_proof(
-    amount: u8,
-    authority_did_key: &str,
-    proof: &OwnershipProof,
-) -> Result<(), OwnershipProofError> {
-    let expected = amount_authority_challenge(amount)?;
-
-    if proof.challenge != expected {
-        return Err(OwnershipProofError::AmountAuthorityChallengeDoesNotMatch {
-            expected,
-            actual: proof.challenge.clone(),
-        });
-    }
-
-    verify_did_key_ownership(authority_did_key, proof)
 }
 
 fn verify_amount_authority_signature(
