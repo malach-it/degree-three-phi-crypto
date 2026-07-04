@@ -1,5 +1,5 @@
 use crate::block::{Block, BlockData};
-use crate::did::{DidKeyBlock, DidKeySubmission, OwnershipProofError};
+use crate::did::{DidKeyBlock, DidKeySubmission, OwnershipProof, OwnershipProofError};
 
 #[derive(Debug)]
 pub struct Blockchain {
@@ -21,6 +21,8 @@ impl Blockchain {
         &mut self,
         submissions: Vec<DidKeySubmission>,
         amount: u8,
+        amount_authority_proof: OwnershipProof,
+        amount_proof_key_authority_proof: OwnershipProof,
     ) -> Result<(), OwnershipProofError> {
         let records = submissions
             .into_iter()
@@ -35,6 +37,8 @@ impl Blockchain {
         let block = DidKeyBlock::new(
             records,
             amount,
+            amount_authority_proof,
+            amount_proof_key_authority_proof,
             &self.amount_authority_did_key,
             previous_participant.as_deref(),
         )?;
@@ -59,7 +63,6 @@ impl Blockchain {
                         previous_participant.as_deref(),
                     )
                     .is_err()
-                || block.verify_proof_key().is_err()
             {
                 return false;
             }
