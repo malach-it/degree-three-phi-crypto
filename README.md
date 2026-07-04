@@ -122,3 +122,7 @@ cargo run --bin load_test -- --workers 4 --ops 250 --parties 32 --difficulty 1 -
 Omit `--print-blocks` for longer runs. The load test prints accepted/rejected
 operation counts, two-party proof checks, final chain validity, and elapsed
 time.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
