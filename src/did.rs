@@ -224,7 +224,6 @@ impl DidKeyBlock {
     pub fn new(
         records: Vec<DidKeyRecord>,
         amount: u8,
-        amount_authority_proof: OwnershipProof,
         amount_proof_key: String,
         authority_signing_key: &SecretKey,
         previous_participant_did_key: Option<&str>,
@@ -240,6 +239,7 @@ impl DidKeyBlock {
         let authority_did_key =
             did_key_from_bls12_381_public_key(&authority_signing_key.sk_to_pk().compress());
         validate_amount(amount)?;
+        let amount_authority_proof = sign_amount_authority_proof(authority_signing_key, amount)?;
         let amount_key = amount_key_for_block(
             &records,
             amount,
@@ -689,6 +689,19 @@ pub fn amount_authority_challenge(amount: u8) -> Result<String, OwnershipProofEr
 
 pub fn amount_proof_key_authority_challenge(amount_proof_key: &str) -> String {
     format!("authorize phi-crypto amount proof key {amount_proof_key}")
+}
+
+fn sign_amount_authority_proof(
+    signing_key: &SecretKey,
+    amount: u8,
+) -> Result<OwnershipProof, OwnershipProofError> {
+    let challenge = amount_authority_challenge(amount)?;
+    let signature = signing_key.sign(challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
+
+    Ok(OwnershipProof::new(
+        challenge,
+        base64url(&signature.compress()),
+    ))
 }
 
 fn sign_amount_proof_key_authority_proof(

@@ -1,5 +1,5 @@
 use crate::block::{Block, BlockData};
-use crate::did::{DidKeyBlock, DidKeySubmission, OwnershipProof, OwnershipProofError};
+use crate::did::{DidKeyBlock, DidKeySubmission, OwnershipProofError};
 use blst::min_pk::SecretKey;
 
 #[derive(Debug)]
@@ -28,7 +28,6 @@ impl Blockchain {
         &mut self,
         submissions: Vec<DidKeySubmission>,
         amount: u8,
-        amount_authority_proof: OwnershipProof,
         amount_proof_key: String,
     ) -> Result<(), OwnershipProofError> {
         let records = submissions
@@ -49,7 +48,6 @@ impl Blockchain {
         let block = DidKeyBlock::new(
             records,
             amount,
-            amount_authority_proof,
             amount_proof_key,
             &self.amount_authority_key,
             previous_participant.as_deref(),
