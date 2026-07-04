@@ -228,6 +228,7 @@ impl DidKeyBlock {
         amount_proof_key: String,
         authority_signing_key: &SecretKey,
         previous_participant_did_key: Option<&str>,
+        previous_participant_amount_key: Option<&str>,
     ) -> Result<Self, OwnershipProofError> {
         if records.len() != DIDS_PER_BLOCK {
             return Err(OwnershipProofError::WrongDidCount {
@@ -245,12 +246,14 @@ impl DidKeyBlock {
             &amount_authority_proof.signature,
             &authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount_key,
         )?;
         let amount_key_group = amount_key_group_for_block(
             &records,
             amount,
             &authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount_key,
         )?;
         let amount_keys = amount_keys_for_records(&records, amount, &amount_key_group)?;
         let amount_proof_key_authority_proof =
@@ -265,7 +268,11 @@ impl DidKeyBlock {
         };
         block.verify_roles()?;
         block.verify_supported_did_keys()?;
-        block.verify_amount_key(&authority_did_key, previous_participant_did_key)?;
+        block.verify_amount_key(
+            &authority_did_key,
+            previous_participant_did_key,
+            previous_participant_amount_key,
+        )?;
         block.verify_amount_proof_key()?;
         block.verify_amount_proof_challenges()?;
         block.verify_amount_proof_key_authority_proof(&authority_did_key)?;
@@ -329,6 +336,7 @@ impl DidKeyBlock {
         &self,
         authority_did_key: &str,
         previous_participant_did_key: Option<&str>,
+        previous_participant_amount_key: Option<&str>,
     ) -> Result<(), OwnershipProofError> {
         let actual_amount_key = amount_key_for_block(
             &self.records,
@@ -336,6 +344,7 @@ impl DidKeyBlock {
             &self.amount_key,
             authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount_key,
         )?;
         if self.amount_key != actual_amount_key {
             return Err(OwnershipProofError::AmountAuthorityKeyDoesNotMatch {
@@ -349,6 +358,7 @@ impl DidKeyBlock {
             self.amount,
             authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount_key,
         )?;
         let actual = amount_keys_for_records(&self.records, self.amount, &amount_key_group)?;
 
@@ -410,8 +420,13 @@ impl DidKeyBlock {
         &self,
         authority_did_key: &str,
         previous_participant_did_key: Option<&str>,
+        previous_participant_amount_key: Option<&str>,
     ) -> Result<(), OwnershipProofError> {
-        self.verify_amount_key(authority_did_key, previous_participant_did_key)?;
+        self.verify_amount_key(
+            authority_did_key,
+            previous_participant_did_key,
+            previous_participant_amount_key,
+        )?;
         self.verify_amount_proof_key()?;
         self.verify_amount_proof_challenges()?;
         self.verify_amount_proof_key_authority_proof(authority_did_key)?;
@@ -555,12 +570,14 @@ pub fn amount_key_for_block(
     amount_authority_signature: &str,
     authority_did_key: &str,
     previous_participant_did_key: Option<&str>,
+    previous_participant_amount_key: Option<&str>,
 ) -> Result<String, OwnershipProofError> {
     let group_key = amount_key_group_for_block(
         records,
         amount,
         authority_did_key,
         previous_participant_did_key,
+        previous_participant_amount_key,
     )?;
 
     if amount_key_uses_duplicate_bridge(records, previous_participant_did_key)? {
@@ -576,6 +593,7 @@ fn amount_key_group_for_block(
     amount: u8,
     authority_did_key: &str,
     previous_participant_did_key: Option<&str>,
+    previous_participant_amount_key: Option<&str>,
 ) -> Result<String, OwnershipProofError> {
     validate_amount(amount)?;
     let authority_amount_key = authority_did_key.to_string();
@@ -592,15 +610,9 @@ fn amount_key_group_for_block(
         return Ok(authority_amount_key);
     }
 
-    let authority_amount_public_key = public_key_from_did_key(&authority_amount_key)?;
-    let previous_participant_public_key = public_key_from_did_key(previous_participant_did_key)?;
-    let current_subject_public_key = public_key_from_did_key(current_subject_did_key)?;
-
-    aggregate_public_keys(&[
-        &authority_amount_public_key,
-        &previous_participant_public_key,
-        &current_subject_public_key,
-    ])
+    previous_participant_amount_key
+        .map(str::to_string)
+        .ok_or_else(|| missing_role_error(DidRole::Participant))
 }
 
 fn amount_key_uses_duplicate_bridge(

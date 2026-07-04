@@ -18,37 +18,35 @@ fn main() {
     let amount_authority = did_key_for_secret_key(&amount_authority_key);
     let mut blockchain = Blockchain::new(DEFAULT_DIFFICULTY_BITS, amount_authority_key.clone());
 
-    let amount = 7;
+    let first_amount = 7;
     let first_signing_keys = [bls_secret_key(7), bls_secret_key(8), bls_secret_key(9)];
-    let first_amount_authority_proof = amount_authority_proof(&amount_authority_key, amount);
+    let first_amount_authority_proof = amount_authority_proof(&amount_authority_key, first_amount);
     let first_amount_key = amount_key_for_demo_block(
         &blockchain,
         &first_signing_keys,
-        amount,
+        first_amount,
         &first_amount_authority_proof,
         &amount_authority,
     );
     add_demo_public_key_block(
         &mut blockchain,
         first_signing_keys,
-        amount,
+        first_amount,
         first_amount_authority_proof,
         first_amount_key,
     );
 
+    let second_amount =
+        last_participant_amount(&blockchain).expect("first block has a participant amount");
     let second_signing_keys = [bls_secret_key(9), bls_secret_key(11), bls_secret_key(12)];
-    let second_amount_authority_proof = amount_authority_proof(&amount_authority_key, amount);
-    let second_amount_key = amount_key_for_demo_block(
-        &blockchain,
-        &second_signing_keys,
-        amount,
-        &second_amount_authority_proof,
-        &amount_authority,
-    );
+    let second_amount_authority_proof =
+        amount_authority_proof(&amount_authority_key, second_amount);
+    let second_amount_key =
+        last_participant_amount_key(&blockchain).expect("first block has a participant amount key");
     add_demo_public_key_block(
         &mut blockchain,
         second_signing_keys,
-        amount,
+        second_amount,
         second_amount_authority_proof,
         second_amount_key,
     );
@@ -122,7 +120,7 @@ fn print_operations(
         .expect("block has DID records");
 
     if previous_participant_did_key == Some(subject) {
-        println!("  operation amount_key = authority_key + previous_participant_key + subject_key");
+        println!("  operation amount_key = previous_participant_amount_key");
     } else {
         println!("  operation amount_key = authority_signature");
     }
@@ -167,6 +165,31 @@ fn did_key_for_role(did_block: &DidKeyBlock, role: DidRole) -> Option<&String> {
         .iter()
         .find(|record| record.role == role)
         .map(|record| &record.did_key)
+}
+
+fn last_participant_amount(blockchain: &Blockchain) -> Option<u8> {
+    blockchain
+        .chain
+        .iter()
+        .rev()
+        .find_map(|block| match &block.data {
+            BlockData::Genesis => None,
+            BlockData::PublicKeys(did_block) => {
+                did_key_for_role(did_block, DidRole::Participant).map(|_| did_block.amount)
+            }
+        })
+}
+
+fn last_participant_amount_key(blockchain: &Blockchain) -> Option<String> {
+    blockchain
+        .chain
+        .iter()
+        .rev()
+        .find_map(|block| match &block.data {
+            BlockData::Genesis => None,
+            BlockData::PublicKeys(did_block) => did_key_for_role(did_block, DidRole::Participant)
+                .map(|_| did_block.amount_keys.participant.clone()),
+        })
 }
 
 fn add_demo_public_key_block(
@@ -280,6 +303,11 @@ fn amount_key_for_demo_block(
             BlockData::PublicKeys(did_block) => did_key_for_role(did_block, DidRole::Participant),
         })
         .map(String::as_str);
+    let previous_participant_amount_key =
+        blockchain.chain.last().and_then(|block| match &block.data {
+            BlockData::Genesis => None,
+            BlockData::PublicKeys(did_block) => Some(did_block.amount_keys.participant.as_str()),
+        });
 
     amount_key_for_block(
         &records,
@@ -287,6 +315,7 @@ fn amount_key_for_demo_block(
         &amount_authority_proof.signature,
         amount_authority_did_key,
         previous_participant,
+        previous_participant_amount_key,
     )
     .expect("demo amount key should compute")
 }
@@ -353,7 +382,7 @@ mod tests {
         assert_eq!(second_block.records[0].role, DidRole::Subject);
         assert_eq!(first_block.records[2].role, DidRole::Participant);
 
-        assert_ne!(second_block.amount_key, test_amount_authority_did_key());
+        assert_eq!(second_block.amount_key, first_block.amount_keys.participant);
     }
 
     #[test]
@@ -807,6 +836,13 @@ mod tests {
                 }
             })
             .map(String::as_str);
+        let previous_participant_amount_key =
+            blockchain.chain.last().and_then(|block| match &block.data {
+                BlockData::Genesis => None,
+                BlockData::PublicKeys(did_block) => {
+                    Some(did_block.amount_keys.participant.as_str())
+                }
+            });
 
         amount_key_for_block(
             &records,
@@ -814,6 +850,7 @@ mod tests {
             &amount_authority_proof.signature,
             &test_amount_authority_did_key(),
             previous_participant,
+            previous_participant_amount_key,
         )
         .expect("test amount key should compute")
     }
@@ -859,6 +896,7 @@ mod tests {
             amount_authority_proof,
             amount_proof_key,
             &authority_key,
+            None,
             None,
         )
         .expect("test records should build a valid DID block")
