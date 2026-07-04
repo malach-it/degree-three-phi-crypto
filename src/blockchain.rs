@@ -40,6 +40,11 @@ impl Blockchain {
             .and_then(|block| public_key_block(block))
             .and_then(|block| block.participant_did_key().ok())
             .map(str::to_string);
+        let previous_participant_amount = self
+            .chain
+            .last()
+            .and_then(|block| public_key_block(block))
+            .map(|block| block.amount);
         let previous_participant_amount_token = self
             .chain
             .last()
@@ -51,6 +56,7 @@ impl Blockchain {
             amount_proof_key,
             &self.amount_authority_key,
             previous_participant.as_deref(),
+            previous_participant_amount,
             previous_participant_amount_token.as_deref(),
         )?;
 
@@ -60,6 +66,7 @@ impl Blockchain {
 
     pub fn public_key_blocks_are_valid(&self) -> bool {
         let mut previous_participant: Option<String> = None;
+        let mut previous_participant_amount: Option<u8> = None;
         let mut previous_participant_amount_token: Option<String> = None;
 
         for block in &self.chain {
@@ -73,6 +80,7 @@ impl Blockchain {
                     .verify_mining_proof(
                         &self.amount_authority_did_key,
                         previous_participant.as_deref(),
+                        previous_participant_amount,
                         previous_participant_amount_token.as_deref(),
                     )
                     .is_err()
@@ -81,6 +89,7 @@ impl Blockchain {
             }
 
             previous_participant = block.participant_did_key().ok().map(str::to_string);
+            previous_participant_amount = Some(block.amount);
             previous_participant_amount_token = Some(block.amount_tokens.participant.clone());
         }
 

@@ -323,6 +323,10 @@ fn amount_token_for_demo_block(
             BlockData::PublicKeys(did_block) => did_key_for_role(did_block, DidRole::Participant),
         })
         .map(String::as_str);
+    let previous_participant_amount = blockchain.chain.last().and_then(|block| match &block.data {
+        BlockData::Genesis => None,
+        BlockData::PublicKeys(did_block) => Some(did_block.amount),
+    });
     let previous_participant_amount_token =
         blockchain.chain.last().and_then(|block| match &block.data {
             BlockData::Genesis => None,
@@ -335,6 +339,7 @@ fn amount_token_for_demo_block(
         amount_authority_signature,
         amount_authority_did_key,
         previous_participant,
+        previous_participant_amount,
         previous_participant_amount_token,
     )
     .expect("demo amount token should compute")
@@ -406,6 +411,30 @@ mod tests {
             second_block.amount_token,
             first_block.amount_tokens.participant
         );
+    }
+
+    #[test]
+    fn rejects_linked_block_with_amount_that_does_not_match_amount_token() {
+        let mut blockchain = test_blockchain();
+
+        add_test_public_key_block(&mut blockchain, [1, 2, 3]);
+
+        let BlockData::PublicKeys(first_block) = &blockchain.chain[1].data else {
+            panic!("expected first public keys block");
+        };
+        let amount_token = first_block.amount_tokens.participant.clone();
+        let submissions = test_submissions_with_challenge([3, 5, 6], &amount_token);
+        let amount_proof_key = amount_proof_key_for_submissions(&submissions);
+        let result = blockchain.add_public_key_block(submissions, 8, amount_proof_key);
+
+        assert!(matches!(
+            result,
+            Err(crate::did::OwnershipProofError::AmountDoesNotMatchToken {
+                expected: 7,
+                actual: 8
+            })
+        ));
+        assert_eq!(blockchain.chain.len(), 2);
     }
 
     #[test]
@@ -840,6 +869,11 @@ mod tests {
                 }
             })
             .map(String::as_str);
+        let previous_participant_amount =
+            blockchain.chain.last().and_then(|block| match &block.data {
+                BlockData::Genesis => None,
+                BlockData::PublicKeys(did_block) => Some(did_block.amount),
+            });
         let previous_participant_amount_token =
             blockchain.chain.last().and_then(|block| match &block.data {
                 BlockData::Genesis => None,
@@ -854,6 +888,7 @@ mod tests {
             amount_authority_signature,
             &test_amount_authority_did_key(),
             previous_participant,
+            previous_participant_amount,
             previous_participant_amount_token,
         )
         .expect("test amount token should compute")
@@ -894,7 +929,15 @@ mod tests {
             amount_proof_key_for_records(&records).expect("signatures should aggregate");
         let authority_key = bls_secret_key(42);
 
-        DidKeyBlock::new(records, 7, amount_proof_key, &authority_key, None, None)
-            .expect("test records should build a valid DID block")
+        DidKeyBlock::new(
+            records,
+            7,
+            amount_proof_key,
+            &authority_key,
+            None,
+            None,
+            None,
+        )
+        .expect("test records should build a valid DID block")
     }
 }

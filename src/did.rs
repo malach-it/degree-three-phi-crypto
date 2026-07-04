@@ -94,6 +94,10 @@ pub enum OwnershipProofError {
         expected: String,
         actual: String,
     },
+    AmountDoesNotMatchToken {
+        expected: u8,
+        actual: u8,
+    },
     AmountTokensDoNotMatch {
         expected: AmountTokens,
         actual: AmountTokens,
@@ -156,6 +160,12 @@ impl fmt::Display for OwnershipProofError {
                 write!(
                     f,
                     "amount authority key mismatch: expected {expected}, got {actual}"
+                )
+            }
+            Self::AmountDoesNotMatchToken { expected, actual } => {
+                write!(
+                    f,
+                    "amount does not match amount token: expected {expected}, got {actual}"
                 )
             }
             Self::AmountTokensDoNotMatch { expected, actual } => {
@@ -227,6 +237,7 @@ impl DidKeyBlock {
         amount_proof_key: String,
         authority_signing_key: &SecretKey,
         previous_participant_did_key: Option<&str>,
+        previous_participant_amount: Option<u8>,
         previous_participant_amount_token: Option<&str>,
     ) -> Result<Self, OwnershipProofError> {
         if records.len() != DIDS_PER_BLOCK {
@@ -246,6 +257,7 @@ impl DidKeyBlock {
             &amount_authority_proof.signature,
             &authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount,
             previous_participant_amount_token,
         )?;
         let amount_token_group = amount_token_group_for_block(
@@ -253,6 +265,7 @@ impl DidKeyBlock {
             amount,
             &authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount,
             previous_participant_amount_token,
         )?;
         let amount_tokens = amount_tokens_for_records(&records, amount, &amount_token_group)?;
@@ -271,6 +284,7 @@ impl DidKeyBlock {
         block.verify_amount_token(
             &authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount,
             previous_participant_amount_token,
         )?;
         block.verify_amount_proof_key()?;
@@ -336,6 +350,7 @@ impl DidKeyBlock {
         &self,
         authority_did_key: &str,
         previous_participant_did_key: Option<&str>,
+        previous_participant_amount: Option<u8>,
         previous_participant_amount_token: Option<&str>,
     ) -> Result<(), OwnershipProofError> {
         let actual_amount_token = amount_token_for_block(
@@ -344,6 +359,7 @@ impl DidKeyBlock {
             &self.amount_token,
             authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount,
             previous_participant_amount_token,
         )?;
         if self.amount_token != actual_amount_token {
@@ -358,6 +374,7 @@ impl DidKeyBlock {
             self.amount,
             authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount,
             previous_participant_amount_token,
         )?;
         let actual = amount_tokens_for_records(&self.records, self.amount, &amount_token_group)?;
@@ -420,11 +437,13 @@ impl DidKeyBlock {
         &self,
         authority_did_key: &str,
         previous_participant_did_key: Option<&str>,
+        previous_participant_amount: Option<u8>,
         previous_participant_amount_token: Option<&str>,
     ) -> Result<(), OwnershipProofError> {
         self.verify_amount_token(
             authority_did_key,
             previous_participant_did_key,
+            previous_participant_amount,
             previous_participant_amount_token,
         )?;
         self.verify_amount_proof_key()?;
@@ -570,6 +589,7 @@ pub fn amount_token_for_block(
     amount_authority_signature: &str,
     authority_did_key: &str,
     previous_participant_did_key: Option<&str>,
+    previous_participant_amount: Option<u8>,
     previous_participant_amount_token: Option<&str>,
 ) -> Result<String, OwnershipProofError> {
     let group_key = amount_token_group_for_block(
@@ -577,6 +597,7 @@ pub fn amount_token_for_block(
         amount,
         authority_did_key,
         previous_participant_did_key,
+        previous_participant_amount,
         previous_participant_amount_token,
     )?;
 
@@ -593,6 +614,7 @@ fn amount_token_group_for_block(
     amount: u8,
     authority_did_key: &str,
     previous_participant_did_key: Option<&str>,
+    previous_participant_amount: Option<u8>,
     previous_participant_amount_token: Option<&str>,
 ) -> Result<String, OwnershipProofError> {
     validate_amount(amount)?;
@@ -608,6 +630,14 @@ fn amount_token_group_for_block(
 
     if current_subject_did_key != previous_participant_did_key {
         return Ok(authority_amount_token);
+    }
+    let previous_participant_amount =
+        previous_participant_amount.ok_or_else(|| missing_role_error(DidRole::Participant))?;
+    if amount != previous_participant_amount {
+        return Err(OwnershipProofError::AmountDoesNotMatchToken {
+            expected: previous_participant_amount,
+            actual: amount,
+        });
     }
 
     previous_participant_amount_token
