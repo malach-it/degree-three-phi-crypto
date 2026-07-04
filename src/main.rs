@@ -8,7 +8,7 @@ use blst::min_pk::SecretKey;
 use did::{
     BLS_SIGNATURE_DST, DidKeyBlock, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
     amount_authority_challenge, amount_proof_key_for_records, amount_token_for_block,
-    did_key_from_bls12_381_public_key,
+    did_key_from_bls12_381_public_key, verify_did_key_ownership,
 };
 
 const DEFAULT_DIFFICULTY_BITS: u8 = 16;
@@ -154,6 +154,35 @@ fn print_operations(
             record.proof.signature
         );
     }
+
+    print_two_party_block_result_verifications(did_block);
+}
+
+fn print_two_party_block_result_verifications(did_block: &DidKeyBlock) {
+    for target_role in [DidRole::Subject, DidRole::Witness, DidRole::Participant] {
+        let verifier_roles = [DidRole::Subject, DidRole::Witness, DidRole::Participant]
+            .into_iter()
+            .filter(|role| *role != target_role)
+            .map(DidRole::as_str)
+            .collect::<Vec<_>>()
+            .join("+");
+        let target_record = record_for_role(did_block, target_role).expect("block has target role");
+        let challenge_matches_block = target_record.proof.challenge == did_block.amount_token;
+        let target_signature_valid =
+            verify_did_key_ownership(&target_record.did_key, &target_record.proof).is_ok();
+        let block_result_matches = amount_proof_key_for_records(&did_block.records)
+            .map(|amount_proof_key| amount_proof_key == did_block.amount_proof_key)
+            .unwrap_or(false);
+
+        println!(
+            "  operation {verifier_roles} verify {} from block_result = challenge:{challenge_matches_block}, signature:{target_signature_valid}, aggregate:{block_result_matches}",
+            target_role.as_str()
+        );
+    }
+}
+
+fn record_for_role(did_block: &DidKeyBlock, role: DidRole) -> Option<&DidKeyRecord> {
+    did_block.records.iter().find(|record| record.role == role)
 }
 
 fn did_key_for_role(did_block: &DidKeyBlock, role: DidRole) -> Option<&String> {
