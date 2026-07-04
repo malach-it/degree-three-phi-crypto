@@ -7,7 +7,7 @@ use blockchain::Blockchain;
 use blst::min_pk::SecretKey;
 use did::{
     BLS_SIGNATURE_DST, DidKeyBlock, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
-    amount_authority_challenge, amount_key_for_block, amount_proof_key_for_records,
+    amount_authority_challenge, amount_proof_key_for_records, amount_token_for_block,
     did_key_from_bls12_381_public_key,
 };
 
@@ -22,7 +22,7 @@ fn main() {
     let first_signing_keys = [bls_secret_key(7), bls_secret_key(8), bls_secret_key(9)];
     let first_amount_authority_signature =
         amount_authority_signature(&amount_authority_key, first_amount);
-    let first_amount_key = amount_key_for_demo_block(
+    let first_amount_token = amount_token_for_demo_block(
         &blockchain,
         &first_signing_keys,
         first_amount,
@@ -33,19 +33,19 @@ fn main() {
         &mut blockchain,
         first_signing_keys,
         first_amount,
-        first_amount_key,
+        first_amount_token,
     );
 
     let second_amount =
         last_participant_amount(&blockchain).expect("first block has a participant amount");
     let second_signing_keys = [bls_secret_key(9), bls_secret_key(11), bls_secret_key(12)];
-    let second_amount_key =
-        last_participant_amount_key(&blockchain).expect("first block has a participant amount key");
+    let second_amount_token = last_participant_amount_token(&blockchain)
+        .expect("first block has a participant amount token");
     add_demo_public_key_block(
         &mut blockchain,
         second_signing_keys,
         second_amount,
-        second_amount_key,
+        second_amount_token,
     );
 
     let mut previous_participant: Option<String> = None;
@@ -79,12 +79,12 @@ fn print_block(
                 previous_participant_did_key,
             );
             println!("  amount {}", did_block.amount);
-            println!("  amount_key {}", did_block.amount_key);
-            println!("  amount_key_subject {}", did_block.amount_keys.subject);
-            println!("  amount_key_witness {}", did_block.amount_keys.witness);
+            println!("  amount_token {}", did_block.amount_token);
+            println!("  amount_token_subject {}", did_block.amount_tokens.subject);
+            println!("  amount_token_witness {}", did_block.amount_tokens.witness);
             println!(
-                "  amount_key_participant {}",
-                did_block.amount_keys.participant
+                "  amount_token_participant {}",
+                did_block.amount_tokens.participant
             );
             println!("  amount_proof_key {}", did_block.amount_proof_key);
             println!(
@@ -117,23 +117,23 @@ fn print_operations(
         .expect("block has DID records");
 
     if previous_participant_did_key == Some(subject) {
-        println!("  operation amount_key = previous_participant_amount_key");
+        println!("  operation amount_token = previous_participant_amount_token");
     } else {
-        println!("  operation amount_key = authority_signature");
+        println!("  operation amount_token = authority_signature");
     }
 
-    println!("  operation common_challenge = amount_key");
+    println!("  operation common_challenge = amount_token");
     println!("  operation common_challenge_value = \"{common_challenge}\"");
     println!(
-        "  operation subject computes amount_key_subject = amount_key_group + {} * subject_key",
+        "  operation subject computes amount_token_subject = amount_token_group + {} * subject_key",
         did_block.amount
     );
     println!(
-        "  operation witness computes amount_key_witness = amount_key_group + {} * witness_key",
+        "  operation witness computes amount_token_witness = amount_token_group + {} * witness_key",
         did_block.amount
     );
     println!(
-        "  operation participant computes amount_key_participant = amount_key_group + {} * participant_key",
+        "  operation participant computes amount_token_participant = amount_token_group + {} * participant_key",
         did_block.amount
     );
     println!(
@@ -177,7 +177,7 @@ fn last_participant_amount(blockchain: &Blockchain) -> Option<u8> {
         })
 }
 
-fn last_participant_amount_key(blockchain: &Blockchain) -> Option<String> {
+fn last_participant_amount_token(blockchain: &Blockchain) -> Option<String> {
     blockchain
         .chain
         .iter()
@@ -185,7 +185,7 @@ fn last_participant_amount_key(blockchain: &Blockchain) -> Option<String> {
         .find_map(|block| match &block.data {
             BlockData::Genesis => None,
             BlockData::PublicKeys(did_block) => did_key_for_role(did_block, DidRole::Participant)
-                .map(|_| did_block.amount_keys.participant.clone()),
+                .map(|_| did_block.amount_tokens.participant.clone()),
         })
 }
 
@@ -193,7 +193,7 @@ fn add_demo_public_key_block(
     blockchain: &mut Blockchain,
     signing_keys: [SecretKey; 3],
     amount: u8,
-    amount_key: String,
+    amount_token: String,
 ) {
     let submissions = signing_keys
         .iter()
@@ -204,7 +204,7 @@ fn add_demo_public_key_block(
                 1 => DidRole::Witness,
                 _ => DidRole::Participant,
             };
-            did_submission_for_key_with_challenge(signing_key, role, &amount_key)
+            did_submission_for_key_with_challenge(signing_key, role, &amount_token)
         })
         .collect::<Vec<_>>();
     let amount_proof_key = amount_proof_key_for_submissions(&submissions);
@@ -263,7 +263,7 @@ fn amount_proof_key_for_submissions(submissions: &[DidKeySubmission]) -> String 
     amount_proof_key_for_records(&records).expect("signatures should aggregate")
 }
 
-fn amount_key_for_demo_block(
+fn amount_token_for_demo_block(
     blockchain: &Blockchain,
     signing_keys: &[SecretKey; 3],
     amount: u8,
@@ -294,21 +294,21 @@ fn amount_key_for_demo_block(
             BlockData::PublicKeys(did_block) => did_key_for_role(did_block, DidRole::Participant),
         })
         .map(String::as_str);
-    let previous_participant_amount_key =
+    let previous_participant_amount_token =
         blockchain.chain.last().and_then(|block| match &block.data {
             BlockData::Genesis => None,
-            BlockData::PublicKeys(did_block) => Some(did_block.amount_keys.participant.as_str()),
+            BlockData::PublicKeys(did_block) => Some(did_block.amount_tokens.participant.as_str()),
         });
 
-    amount_key_for_block(
+    amount_token_for_block(
         &records,
         amount,
         amount_authority_signature,
         amount_authority_did_key,
         previous_participant,
-        previous_participant_amount_key,
+        previous_participant_amount_token,
     )
-    .expect("demo amount key should compute")
+    .expect("demo amount token should compute")
 }
 
 fn bls_secret_key(seed: u8) -> SecretKey {
@@ -327,7 +327,7 @@ fn base64url(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::block::{Block, BlockData, is_perfect_square};
-    use crate::did::{DidKeyBlock, amount_keys_for_records, amount_proof_key_for_records};
+    use crate::did::{DidKeyBlock, amount_proof_key_for_records, amount_tokens_for_records};
 
     #[test]
     fn mined_genesis_blocks_prove_a_square() {
@@ -338,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn public_key_blocks_use_amount_key_as_mining_proof() {
+    fn public_key_blocks_use_amount_token_as_mining_proof() {
         let block = Block::mine(
             1,
             BlockData::PublicKeys(test_did_key_block([1, 2, 3])),
@@ -373,7 +373,10 @@ mod tests {
         assert_eq!(second_block.records[0].role, DidRole::Subject);
         assert_eq!(first_block.records[2].role, DidRole::Participant);
 
-        assert_eq!(second_block.amount_key, first_block.amount_keys.participant);
+        assert_eq!(
+            second_block.amount_token,
+            first_block.amount_tokens.participant
+        );
     }
 
     #[test]
@@ -396,14 +399,14 @@ mod tests {
         };
         let record = &records.records[0];
         let amount_authority_did_key = test_amount_authority_did_key();
-        let expected_amount_keys =
-            amount_keys_for_records(&records.records, records.amount, &amount_authority_did_key)
-                .expect("amount key should aggregate");
+        let expected_amount_tokens =
+            amount_tokens_for_records(&records.records, records.amount, &amount_authority_did_key)
+                .expect("amount token should aggregate");
         let expected_amount_proof_key =
             amount_proof_key_for_records(&records.records).expect("signatures should aggregate");
 
         assert_eq!(records.amount, 7);
-        assert_eq!(records.amount_key, test_amount_authority_signature(7));
+        assert_eq!(records.amount_token, test_amount_authority_signature(7));
         assert!(
             !records
                 .records
@@ -416,10 +419,13 @@ mod tests {
         assert_eq!(records.records[2].role, DidRole::Participant);
         assert_ne!(records.records[0].did_key, records.records[1].did_key);
         assert_eq!(record.did_key, expected_did);
-        assert_eq!(records.amount_keys, expected_amount_keys);
+        assert_eq!(records.amount_tokens, expected_amount_tokens);
         assert_eq!(records.amount_proof_key, expected_amount_proof_key);
-        assert_ne!(records.amount_keys.subject, records.amount_keys.witness);
-        assert_ne!(records.amount_keys.subject, records.amount_keys.participant);
+        assert_ne!(records.amount_tokens.subject, records.amount_tokens.witness);
+        assert_ne!(
+            records.amount_tokens.subject,
+            records.amount_tokens.participant
+        );
     }
 
     #[test]
@@ -526,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_public_key_block_with_tampered_role_amount_key() {
+    fn validation_rejects_public_key_block_with_tampered_role_amount_token() {
         let mut blockchain = test_blockchain();
 
         add_test_public_key_block(&mut blockchain, [9, 10, 11]);
@@ -534,7 +540,7 @@ mod tests {
         let BlockData::PublicKeys(records) = &mut blockchain.chain[1].data else {
             panic!("expected public keys block");
         };
-        records.amount_keys.participant =
+        records.amount_tokens.participant =
             did_key_from_bls12_381_public_key(&bls_secret_key(12).sk_to_pk().compress());
 
         blockchain.chain[1].hash = blockchain.chain[1].recalculate_hash();
@@ -595,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_role_amount_keys_with_wrong_duplication_count() {
+    fn validation_rejects_role_amount_tokens_with_wrong_duplication_count() {
         let mut blockchain = test_blockchain();
 
         add_test_public_key_block(&mut blockchain, [9, 10, 11]);
@@ -603,7 +609,7 @@ mod tests {
         let BlockData::PublicKeys(records) = &mut blockchain.chain[1].data else {
             panic!("expected public keys block");
         };
-        records.amount_keys = amount_keys_for_records(
+        records.amount_tokens = amount_tokens_for_records(
             &records.records,
             records.amount - 1,
             &test_amount_authority_did_key(),
@@ -616,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_public_key_block_with_tampered_amount_key() {
+    fn validation_rejects_public_key_block_with_tampered_amount_token() {
         let mut blockchain = test_blockchain();
 
         add_test_public_key_block(&mut blockchain, [9, 10, 11]);
@@ -624,7 +630,7 @@ mod tests {
         let BlockData::PublicKeys(records) = &mut blockchain.chain[1].data else {
             panic!("expected public keys block");
         };
-        records.amount_key =
+        records.amount_token =
             did_key_from_bls12_381_public_key(&bls_secret_key(12).sk_to_pk().compress());
 
         blockchain.chain[1].hash = blockchain.chain[1].recalculate_hash();
@@ -641,7 +647,7 @@ mod tests {
         let BlockData::PublicKeys(records) = &mut blockchain.chain[1].data else {
             panic!("expected public keys block");
         };
-        records.amount_key = amount_authority_signature(&bls_secret_key(41), 7);
+        records.amount_token = amount_authority_signature(&bls_secret_key(41), 7);
 
         blockchain.chain[1].hash = blockchain.chain[1].recalculate_hash();
 
@@ -759,14 +765,14 @@ mod tests {
         amount: u8,
         amount_authority_signature: &str,
     ) -> Vec<DidKeySubmission> {
-        let amount_key = test_amount_key_for_next_block(
+        let amount_token = test_amount_token_for_next_block(
             blockchain,
             key_bytes,
             amount,
             amount_authority_signature,
         );
 
-        test_submissions_with_challenge(key_bytes, &amount_key)
+        test_submissions_with_challenge(key_bytes, &amount_token)
     }
 
     fn test_submissions_with_challenge(
@@ -788,7 +794,7 @@ mod tests {
             .collect()
     }
 
-    fn test_amount_key_for_next_block(
+    fn test_amount_token_for_next_block(
         blockchain: &Blockchain,
         key_bytes: [u8; 3],
         amount: u8,
@@ -805,23 +811,23 @@ mod tests {
                 }
             })
             .map(String::as_str);
-        let previous_participant_amount_key =
+        let previous_participant_amount_token =
             blockchain.chain.last().and_then(|block| match &block.data {
                 BlockData::Genesis => None,
                 BlockData::PublicKeys(did_block) => {
-                    Some(did_block.amount_keys.participant.as_str())
+                    Some(did_block.amount_tokens.participant.as_str())
                 }
             });
 
-        amount_key_for_block(
+        amount_token_for_block(
             &records,
             amount,
             amount_authority_signature,
             &test_amount_authority_did_key(),
             previous_participant,
-            previous_participant_amount_key,
+            previous_participant_amount_token,
         )
-        .expect("test amount key should compute")
+        .expect("test amount token should compute")
     }
 
     fn test_records_without_proofs(key_bytes: [u8; 3]) -> Vec<DidKeyRecord> {

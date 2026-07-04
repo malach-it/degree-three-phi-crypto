@@ -21,26 +21,26 @@ as a block participant. Instead, it signs the amount:
 authority_signature = sign(authority_key, "authorize phi-crypto amount {amount}")
 ```
 
-For a normal block, the block `amount_key` is this authority signature. For a
+For a normal block, the block `amount_token` is this authority signature. For a
 linked duplicate block, where the previous participant becomes the next subject,
-the `amount_key` is a group addition:
+the `amount_token` is a group addition:
 
 ```text
-amount_key = authority_key + previous_participant_key + subject_key
+amount_token = authority_key + previous_participant_key + subject_key
 ```
 
 Each party receives the same common challenge:
 
 ```text
-common_challenge = amount_key
+common_challenge = amount_token
 ```
 
 Then each party signs that challenge:
 
 ```text
-subject_signature = sign(subject_key, amount_key)
-witness_signature = sign(witness_key, amount_key)
-participant_signature = sign(participant_key, amount_key)
+subject_signature = sign(subject_key, amount_token)
+witness_signature = sign(witness_key, amount_token)
+participant_signature = sign(participant_key, amount_token)
 ```
 
 The submitted `amount_proof_key` is the aggregate of those signatures:
@@ -60,17 +60,17 @@ amount_proof_key_authority_signature =
 
 Block verification recomputes the aggregate, checks that the submitted
 `amount_proof_key` matches it, checks that each party actually signed the block
-`amount_key`, and verifies the authority signature over the resulting
+`amount_token`, and verifies the authority signature over the resulting
 `amount_proof_key`.
 
 ## Role Amount Keys
 
-The block also stores a derived amount key for each role:
+The block also stores a derived amount token for each role:
 
 ```text
-amount_key_subject = amount_key_group + amount * subject_key
-amount_key_witness = amount_key_group + amount * witness_key
-amount_key_participant = amount_key_group + amount * participant_key
+amount_token_subject = amount_token_group + amount * subject_key
+amount_token_witness = amount_token_group + amount * witness_key
+amount_token_participant = amount_token_group + amount * participant_key
 ```
 
 These are public group keys. They prove the block used the same amount
@@ -85,7 +85,7 @@ Two parties cannot derive the third party DID from only:
 ```text
 amount_proof_key
 amount_proof_key_authority_signature
-their own amount keys
+their own amount tokens
 their own signatures
 ```
 

@@ -40,18 +40,18 @@ impl Blockchain {
             .and_then(|block| public_key_block(block))
             .and_then(|block| block.participant_did_key().ok())
             .map(str::to_string);
-        let previous_participant_amount_key = self
+        let previous_participant_amount_token = self
             .chain
             .last()
             .and_then(|block| public_key_block(block))
-            .map(|block| block.amount_keys.participant.clone());
+            .map(|block| block.amount_tokens.participant.clone());
         let block = DidKeyBlock::new(
             records,
             amount,
             amount_proof_key,
             &self.amount_authority_key,
             previous_participant.as_deref(),
-            previous_participant_amount_key.as_deref(),
+            previous_participant_amount_token.as_deref(),
         )?;
 
         self.add_block(BlockData::PublicKeys(block));
@@ -60,7 +60,7 @@ impl Blockchain {
 
     pub fn public_key_blocks_are_valid(&self) -> bool {
         let mut previous_participant: Option<String> = None;
-        let mut previous_participant_amount_key: Option<String> = None;
+        let mut previous_participant_amount_token: Option<String> = None;
 
         for block in &self.chain {
             let BlockData::PublicKeys(block) = &block.data else {
@@ -73,7 +73,7 @@ impl Blockchain {
                     .verify_mining_proof(
                         &self.amount_authority_did_key,
                         previous_participant.as_deref(),
-                        previous_participant_amount_key.as_deref(),
+                        previous_participant_amount_token.as_deref(),
                     )
                     .is_err()
             {
@@ -81,7 +81,7 @@ impl Blockchain {
             }
 
             previous_participant = block.participant_did_key().ok().map(str::to_string);
-            previous_participant_amount_key = Some(block.amount_keys.participant.clone());
+            previous_participant_amount_token = Some(block.amount_tokens.participant.clone());
         }
 
         true
