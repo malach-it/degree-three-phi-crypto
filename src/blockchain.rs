@@ -29,11 +29,13 @@ impl Blockchain {
         Ok(())
     }
 
-    pub fn public_key_blocks_have_supported_dids(&self) -> bool {
+    pub fn public_key_blocks_are_valid(&self) -> bool {
         self.chain.iter().all(|block| match &block.data {
             BlockData::Genesis => true,
             BlockData::PublicKeys(block) => {
-                block.verify_roles().is_ok() && block.verify_supported_did_keys().is_ok()
+                block.verify_roles().is_ok()
+                    && block.verify_supported_did_keys().is_ok()
+                    && block.verify_proof_key().is_ok()
             }
         })
     }
@@ -59,7 +61,7 @@ impl Blockchain {
             && genesis.previous_hash == "0".repeat(64)
             && genesis.hash == genesis.recalculate_hash()
             && genesis.proves_square(self.difficulty_bits)
-            && self.public_key_blocks_have_supported_dids()
+            && self.public_key_blocks_are_valid()
             && self
                 .chain
                 .windows(2)

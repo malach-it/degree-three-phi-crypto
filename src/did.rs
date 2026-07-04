@@ -1,7 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use blst::BLST_ERROR;
-use blst::min_pk::{PublicKey, Signature};
+use blst::min_pk::{AggregatePublicKey, PublicKey, Signature};
 use std::array::TryFromSliceError;
 use std::error::Error;
 use std::fmt;
@@ -30,6 +30,7 @@ pub enum DidRole {
 #[derive(Debug, Clone)]
 pub struct DidKeyBlock {
     pub records: Vec<DidKeyRecord>,
+    pub proof_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +57,8 @@ pub enum OwnershipProofError {
     InvalidPublicKeyLength(TryFromSliceError),
     InvalidSignatureEncoding(base64::DecodeError),
     InvalidPublicKey(BLST_ERROR),
+    InvalidProofKey(BLST_ERROR),
+    ProofKeyDoesNotMatch { expected: String, actual: String },
     InvalidSignature(BLST_ERROR),
 }
 
@@ -88,6 +91,10 @@ impl fmt::Display for OwnershipProofError {
                 write!(f, "signature is not valid base64url: {error}")
             }
             Self::InvalidPublicKey(error) => write!(f, "public key is invalid: {error:?}"),
+            Self::InvalidProofKey(error) => write!(f, "proof key is invalid: {error:?}"),
+            Self::ProofKeyDoesNotMatch { expected, actual } => {
+                write!(f, "proof key mismatch: expected {expected}, got {actual}")
+            }
             Self::InvalidSignature(error) => {
                 write!(f, "signature does not match challenge: {error:?}")
             }
@@ -128,9 +135,11 @@ impl DidKeyBlock {
             });
         }
 
-        let block = Self { records };
+        let proof_key = proof_key_for_records(&records)?;
+        let block = Self { records, proof_key };
         block.verify_roles()?;
         block.verify_supported_did_keys()?;
+        block.verify_proof_key()?;
         Ok(block)
     }
 
@@ -144,7 +153,11 @@ impl DidKeyBlock {
             .collect::<Vec<_>>()
             .join("|");
 
-        format!("type=did-key-block;records={records}").into_bytes()
+        format!(
+            "type=did-key-block;proof_key={};records={records}",
+            self.proof_key
+        )
+        .into_bytes()
     }
 
     pub fn verify_supported_did_keys(&self) -> Result<(), OwnershipProofError> {
@@ -160,6 +173,19 @@ impl DidKeyBlock {
         }
 
         Ok(())
+    }
+
+    pub fn verify_proof_key(&self) -> Result<(), OwnershipProofError> {
+        let actual = proof_key_for_records(&self.records)?;
+
+        if self.proof_key == actual {
+            Ok(())
+        } else {
+            Err(OwnershipProofError::ProofKeyDoesNotMatch {
+                expected: self.proof_key.clone(),
+                actual,
+            })
+        }
     }
 
     pub fn verify_roles(&self) -> Result<(), OwnershipProofError> {
@@ -260,13 +286,24 @@ pub fn bls12_381_public_key_from_did_key(did_key: &str) -> Result<[u8; 48], Owne
         .map_err(OwnershipProofError::InvalidPublicKeyLength)
 }
 
+pub fn proof_key_for_records(records: &[DidKeyRecord]) -> Result<String, OwnershipProofError> {
+    let public_keys = records
+        .iter()
+        .map(|record| public_key_from_did_key(&record.did_key))
+        .collect::<Result<Vec<_>, _>>()?;
+    let public_key_refs = public_keys.iter().collect::<Vec<_>>();
+    let aggregate = AggregatePublicKey::aggregate(&public_key_refs, true)
+        .map_err(OwnershipProofError::InvalidProofKey)?;
+    let proof_key = aggregate.to_public_key().compress();
+
+    Ok(did_key_from_bls12_381_public_key(&proof_key))
+}
+
 pub fn verify_did_key_ownership(
     did_key: &str,
     proof: &OwnershipProof,
 ) -> Result<(), OwnershipProofError> {
-    let public_key_bytes = bls12_381_public_key_from_did_key(did_key)?;
-    let public_key =
-        PublicKey::uncompress(&public_key_bytes).map_err(OwnershipProofError::InvalidPublicKey)?;
+    let public_key = public_key_from_did_key(did_key)?;
 
     let signature_bytes = URL_SAFE_NO_PAD
         .decode(&proof.signature)
@@ -288,4 +325,10 @@ pub fn verify_did_key_ownership(
     } else {
         Err(OwnershipProofError::InvalidSignature(result))
     }
+}
+
+fn public_key_from_did_key(did_key: &str) -> Result<PublicKey, OwnershipProofError> {
+    let public_key_bytes = bls12_381_public_key_from_did_key(did_key)?;
+
+    PublicKey::uncompress(&public_key_bytes).map_err(OwnershipProofError::InvalidPublicKey)
 }

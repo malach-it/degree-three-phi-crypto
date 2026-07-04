@@ -2,6 +2,7 @@ mod block;
 mod blockchain;
 mod did;
 
+use block::{Block, BlockData};
 use blockchain::Blockchain;
 use blst::min_pk::SecretKey;
 use did::{
@@ -23,13 +24,30 @@ fn main() {
     );
 
     for block in &blockchain.chain {
-        println!(
-            "block #{}, nonce {}, square-proof {}, hash {}, data {:?}\n",
-            block.index, block.nonce, block.proof_square, block.hash, block.data
-        );
+        print_block(block);
     }
 
     println!("chain valid: {}", blockchain.is_valid());
+}
+
+fn print_block(block: &Block) {
+    println!(
+        "block #{}, nonce {}, square-proof {}, hash {}",
+        block.index, block.nonce, block.proof_square, block.hash
+    );
+
+    match &block.data {
+        BlockData::Genesis => println!("  genesis"),
+        BlockData::PublicKeys(did_block) => {
+            println!("  proof_key {}", did_block.proof_key);
+
+            for record in &did_block.records {
+                println!("  {:?}: {}", record.role, record.did_key);
+            }
+        }
+    }
+
+    println!();
 }
 
 fn add_demo_public_key_block(blockchain: &mut Blockchain, signing_keys: [SecretKey; 3]) {
@@ -80,7 +98,7 @@ fn base64url(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::block::{Block, BlockData, is_perfect_square};
-    use crate::did::{DidKeyBlock, DidKeyRecord};
+    use crate::did::{DidKeyBlock, DidKeyRecord, proof_key_for_records};
 
     #[test]
     fn mined_blocks_prove_a_square() {
@@ -121,6 +139,8 @@ mod tests {
             panic!("expected public keys block");
         };
         let record = &records.records[0];
+        let expected_proof_key =
+            proof_key_for_records(&records.records).expect("records should aggregate");
 
         assert_eq!(records.records.len(), 3);
         assert_eq!(records.records[0].role, DidRole::Subject);
@@ -128,6 +148,7 @@ mod tests {
         assert_eq!(records.records[2].role, DidRole::Participant);
         assert_ne!(records.records[0].did_key, records.records[1].did_key);
         assert_eq!(record.did_key, expected_did);
+        assert_eq!(records.proof_key, expected_proof_key);
     }
 
     #[test]
@@ -221,6 +242,23 @@ mod tests {
             panic!("expected public keys block");
         };
         records.records[0].did_key = "did:key:z6MkiTBzTamperedDid".to_string();
+
+        blockchain.chain[1].hash = blockchain.chain[1].recalculate_hash();
+
+        assert!(!blockchain.is_valid());
+    }
+
+    #[test]
+    fn validation_rejects_public_key_block_with_tampered_proof_key() {
+        let mut blockchain = Blockchain::new(12);
+
+        add_test_public_key_block(&mut blockchain, [9, 10, 11]);
+
+        let BlockData::PublicKeys(records) = &mut blockchain.chain[1].data else {
+            panic!("expected public keys block");
+        };
+        records.proof_key =
+            did_key_from_bls12_381_public_key(&bls_secret_key(12).sk_to_pk().compress());
 
         blockchain.chain[1].hash = blockchain.chain[1].recalculate_hash();
 
