@@ -17,37 +17,33 @@ created, but they are not persisted in the block.
 ## Amount Protocol
 
 An amount is a small integer less than 100. The amount authority is not stored
-as a block participant. Instead, it signs the amount:
+as a block participant. For a fresh transaction, the `three_degree_phi_token_group` starts
+from the authority DID key. For a linked duplicate transaction, where the
+previous participant becomes the next subject, the `three_degree_phi_token_group` starts from
+the previous participant three degree phi token:
 
 ```text
-authority_signature = sign(authority_key, "authorize phi-crypto amount {amount}")
+fresh three_degree_phi_token_group = authority_key
+linked three_degree_phi_token_group = previous_participant_three_degree_phi_token
 ```
 
-For a normal block, the block `amount_token` is this authority signature. For a
-linked duplicate block, where the previous participant becomes the next subject,
-the `amount_token` is a group addition:
+The parties derive a three degree phi token for each role:
 
 ```text
-amount_token = authority_key + previous_participant_key + subject_key
-```
-
-The block also stores a derived amount token for each role:
-
-```text
-amount_token_subject = amount_token_group + amount * subject_key
-amount_token_witness = amount_token_group + amount * witness_key
-amount_token_participant = amount_token_group + amount * participant_key
+three_degree_phi_token_subject = three_degree_phi_token_group + amount * subject_key
+three_degree_phi_token_witness = three_degree_phi_token_group + amount * witness_key
+three_degree_phi_token_participant = three_degree_phi_token_group + amount * participant_key
 ```
 
 These are public group keys. They prove the block used the same amount
 duplication count for each role key.
 
-Each party signs its own role amount token:
+Each party signs its own role three degree phi token:
 
 ```text
-subject_signature = sign(subject_key, amount_token_subject)
-witness_signature = sign(witness_key, amount_token_witness)
-participant_signature = sign(participant_key, amount_token_participant)
+subject_signature = sign(subject_key, three_degree_phi_token_subject)
+witness_signature = sign(witness_key, three_degree_phi_token_witness)
+participant_signature = sign(participant_key, three_degree_phi_token_participant)
 ```
 
 The submitted `amount_proof_key` is the aggregate of those signatures:
@@ -65,7 +61,7 @@ amount_proof_key_authority_signature =
   sign(authority_key, "authorize phi-crypto amount proof key {amount_proof_key}")
 ```
 
-At block creation, the chain recomputes the role amount tokens, checks that
+At block creation, the chain recomputes the role three degree phi tokens, checks that
 each party signed the correct role token, checks that the submitted
 `amount_proof_key` matches the aggregate signatures, and verifies the authority
 signature over the resulting `amount_proof_key`.
@@ -84,14 +80,14 @@ amount
 subject DID record and signature
 witness DID record and signature
 participant DID record and signature
-previous participant amount token, for chained transactions
+previous participant three degree phi token, for chained transactions
 ```
 
 Given that witness data and the stored block receipt, they verify:
 
 ```text
-role amount tokens recompute from amount and DID records
-each party signature verifies its role amount token
+role three degree phi tokens recompute from amount and DID records
+each party signature verifies its role three degree phi token
 subject_signature + witness_signature + participant_signature == amount_proof_key
 amount_proof_key_authority_signature verifies authority approval of amount_proof_key
 ```
@@ -109,7 +105,7 @@ Two parties cannot derive the third party DID from only:
 ```text
 amount_proof_key
 amount_proof_key_authority_signature
-their own amount tokens
+their own three degree phi tokens
 their own signatures
 ```
 
@@ -136,13 +132,13 @@ To verify a known candidate third DID, two parties check the candidate against
 the public block result:
 
 ```text
-candidate_signature verifies candidate_did over candidate_role_amount_token
+candidate_signature verifies candidate_did over candidate_role_three_degree_phi_token
 candidate_signature + known_signature_1 + known_signature_2 == amount_proof_key
 amount_proof_key_authority_signature verifies authority approval of amount_proof_key
 ```
 
 In other words, the candidate DID is accepted only if its signature verifies the
-candidate role amount token and the three signatures aggregate back to the
+candidate role three degree phi token and the three signatures aggregate back to the
 block's `amount_proof_key`.
 
 This means the protocol can prove participation by known DIDs, but it is not a

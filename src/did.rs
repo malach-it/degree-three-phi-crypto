@@ -36,7 +36,7 @@ pub struct DidKeyBlock {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AmountTokens {
+pub struct ThreeDegreePhiTokens {
     pub subject: String,
     pub witness: String,
     pub participant: String,
@@ -114,11 +114,13 @@ impl fmt::Display for OwnershipProofError {
                 write!(f, "signature is not valid base64url: {error}")
             }
             Self::InvalidPublicKey(error) => write!(f, "public key is invalid: {error:?}"),
-            Self::InvalidAmountToken(error) => write!(f, "amount token is invalid: {error:?}"),
+            Self::InvalidAmountToken(error) => {
+                write!(f, "three degree phi token is invalid: {error:?}")
+            }
             Self::AmountDoesNotMatchToken { expected, actual } => {
                 write!(
                     f,
-                    "amount does not match amount token: expected {expected}, got {actual}"
+                    "amount does not match three degree phi token: expected {expected}, got {actual}"
                 )
             }
             Self::AmountProofKeyDoesNotMatch { expected, actual } => {
@@ -174,7 +176,7 @@ impl DidKeyBlock {
         authority_signing_key: &SecretKey,
         previous_participant_did_key: Option<&str>,
         previous_participant_amount: Option<u8>,
-        previous_participant_amount_token: Option<&str>,
+        previous_participant_three_degree_phi_token: Option<&str>,
     ) -> Result<Self, OwnershipProofError> {
         if records.len() != DIDS_PER_BLOCK {
             return Err(OwnershipProofError::WrongDidCount {
@@ -186,21 +188,22 @@ impl DidKeyBlock {
         let authority_did_key =
             did_key_from_bls12_381_public_key(&authority_signing_key.sk_to_pk().compress());
         validate_amount(amount)?;
-        let amount_token_group = amount_token_group_for_block(
+        let three_degree_phi_token_group = three_degree_phi_token_group_for_block(
             &records,
             amount,
             &authority_did_key,
             previous_participant_did_key,
             previous_participant_amount,
-            previous_participant_amount_token,
+            previous_participant_three_degree_phi_token,
         )?;
-        let amount_tokens = amount_tokens_for_records(&records, amount, &amount_token_group)?;
+        let three_degree_phi_tokens =
+            three_degree_phi_tokens_for_records(&records, amount, &three_degree_phi_token_group)?;
         let amount_proof_key_authority_proof =
             sign_amount_proof_key_authority_proof(authority_signing_key, &amount_proof_key);
         verify_roles_for_records(&records)?;
         verify_supported_did_keys_for_records(&records)?;
         verify_amount_proof_key_for_records(&records, &amount_proof_key)?;
-        verify_amount_proof_challenges_for_records(&records, &amount_tokens)?;
+        verify_amount_proof_challenges_for_records(&records, &three_degree_phi_tokens)?;
         verify_ownership_proofs_for_records(&records)?;
         let block = Self {
             amount_proof_key,
@@ -333,13 +336,13 @@ fn verify_amount_proof_key_for_records(
 
 fn verify_amount_proof_challenges_for_records(
     records: &[DidKeyRecord],
-    amount_tokens: &AmountTokens,
+    three_degree_phi_tokens: &ThreeDegreePhiTokens,
 ) -> Result<(), OwnershipProofError> {
     for record in records {
         let expected = match record.role {
-            DidRole::Subject => &amount_tokens.subject,
-            DidRole::Witness => &amount_tokens.witness,
-            DidRole::Participant => &amount_tokens.participant,
+            DidRole::Subject => &three_degree_phi_tokens.subject,
+            DidRole::Witness => &three_degree_phi_tokens.witness,
+            DidRole::Participant => &three_degree_phi_tokens.participant,
         };
 
         if &record.proof.challenge != expected {
@@ -421,18 +424,18 @@ pub fn bls12_381_public_key_from_did_key(did_key: &str) -> Result<[u8; 48], Owne
         .map_err(OwnershipProofError::InvalidPublicKeyLength)
 }
 
-pub fn amount_token_group_for_block(
+pub fn three_degree_phi_token_group_for_block(
     records: &[DidKeyRecord],
     amount: u8,
     authority_did_key: &str,
     previous_participant_did_key: Option<&str>,
     previous_participant_amount: Option<u8>,
-    previous_participant_amount_token: Option<&str>,
+    previous_participant_three_degree_phi_token: Option<&str>,
 ) -> Result<String, OwnershipProofError> {
     validate_amount(amount)?;
-    let authority_amount_token = authority_did_key.to_string();
+    let authority_three_degree_phi_token = authority_did_key.to_string();
     let Some(previous_participant_did_key) = previous_participant_did_key else {
-        return Ok(authority_amount_token);
+        return Ok(authority_three_degree_phi_token);
     };
     let current_subject_did_key = records
         .iter()
@@ -441,7 +444,7 @@ pub fn amount_token_group_for_block(
         .ok_or_else(|| missing_role_error(DidRole::Subject))?;
 
     if current_subject_did_key != previous_participant_did_key {
-        return Ok(authority_amount_token);
+        return Ok(authority_three_degree_phi_token);
     }
     let previous_participant_amount =
         previous_participant_amount.ok_or_else(|| missing_role_error(DidRole::Participant))?;
@@ -452,23 +455,33 @@ pub fn amount_token_group_for_block(
         });
     }
 
-    previous_participant_amount_token
+    previous_participant_three_degree_phi_token
         .map(str::to_string)
         .ok_or_else(|| missing_role_error(DidRole::Participant))
 }
 
-pub fn amount_tokens_for_records(
+pub fn three_degree_phi_tokens_for_records(
     records: &[DidKeyRecord],
     amount: u8,
-    amount_token: &str,
-) -> Result<AmountTokens, OwnershipProofError> {
+    three_degree_phi_token: &str,
+) -> Result<ThreeDegreePhiTokens, OwnershipProofError> {
     validate_amount(amount)?;
-    let amount_public_key = public_key_from_did_key(amount_token)?;
+    let amount_public_key = public_key_from_did_key(three_degree_phi_token)?;
 
-    Ok(AmountTokens {
-        subject: amount_token_for_role(records, DidRole::Subject, amount, &amount_public_key)?,
-        witness: amount_token_for_role(records, DidRole::Witness, amount, &amount_public_key)?,
-        participant: amount_token_for_role(
+    Ok(ThreeDegreePhiTokens {
+        subject: three_degree_phi_token_for_role(
+            records,
+            DidRole::Subject,
+            amount,
+            &amount_public_key,
+        )?,
+        witness: three_degree_phi_token_for_role(
+            records,
+            DidRole::Witness,
+            amount,
+            &amount_public_key,
+        )?,
+        participant: three_degree_phi_token_for_role(
             records,
             DidRole::Participant,
             amount,
@@ -491,7 +504,7 @@ pub fn amount_proof_key_for_records(
     Ok(base64url(&aggregate.to_signature().compress()))
 }
 
-fn amount_token_for_role(
+fn three_degree_phi_token_for_role(
     records: &[DidKeyRecord],
     role: DidRole,
     amount: u8,
@@ -501,8 +514,8 @@ fn amount_token_for_role(
         .iter()
         .find(|record| record.role == role)
         .ok_or_else(|| missing_role_error(role))?;
-    let role_amount_token = amount_token_for_did_key(&record.did_key, amount)?;
-    let role_public_key = public_key_from_did_key(&role_amount_token)?;
+    let role_three_degree_phi_token = three_degree_phi_token_for_did_key(&record.did_key, amount)?;
+    let role_public_key = public_key_from_did_key(&role_three_degree_phi_token)?;
 
     aggregate_public_keys(&[amount_public_key, &role_public_key])
 }
@@ -521,23 +534,26 @@ fn sign_amount_proof_key_authority_proof(
     OwnershipProof::new(challenge, base64url(&signature.compress()))
 }
 
-pub fn amount_token_for_did_key(did_key: &str, amount: u8) -> Result<String, OwnershipProofError> {
+pub fn three_degree_phi_token_for_did_key(
+    did_key: &str,
+    amount: u8,
+) -> Result<String, OwnershipProofError> {
     validate_amount(amount)?;
     let public_key = public_key_from_did_key(did_key)?;
     let public_key_refs = (0..amount).map(|_| &public_key).collect::<Vec<_>>();
     let aggregate = AggregatePublicKey::aggregate(&public_key_refs, true)
         .map_err(OwnershipProofError::InvalidAmountToken)?;
-    let amount_token = aggregate.to_public_key().compress();
+    let three_degree_phi_token = aggregate.to_public_key().compress();
 
-    Ok(did_key_from_bls12_381_public_key(&amount_token))
+    Ok(did_key_from_bls12_381_public_key(&three_degree_phi_token))
 }
 
 fn aggregate_public_keys(public_keys: &[&PublicKey]) -> Result<String, OwnershipProofError> {
     let aggregate = AggregatePublicKey::aggregate(public_keys, true)
         .map_err(OwnershipProofError::InvalidAmountToken)?;
-    let amount_token = aggregate.to_public_key().compress();
+    let three_degree_phi_token = aggregate.to_public_key().compress();
 
-    Ok(did_key_from_bls12_381_public_key(&amount_token))
+    Ok(did_key_from_bls12_381_public_key(&three_degree_phi_token))
 }
 
 fn missing_role_error(role: DidRole) -> OwnershipProofError {
