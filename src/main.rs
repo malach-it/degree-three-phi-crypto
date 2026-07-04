@@ -7,8 +7,7 @@ use blockchain::Blockchain;
 use blst::min_pk::SecretKey;
 use did::{
     BLS_SIGNATURE_DST, DidKeyBlock, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
-    amount_authority_challenge, amount_key_for_block, amount_proof_key_authority_challenge,
-    amount_proof_key_for_records, did_key_from_bls12_381_public_key,
+    amount_authority_challenge, amount_key_for_block, did_key_from_bls12_381_public_key,
 };
 
 const DEFAULT_DIFFICULTY_BITS: u8 = 16;
@@ -16,7 +15,7 @@ const DEFAULT_DIFFICULTY_BITS: u8 = 16;
 fn main() {
     let amount_authority_key = bls_secret_key(42);
     let amount_authority = did_key_for_secret_key(&amount_authority_key);
-    let mut blockchain = Blockchain::new(DEFAULT_DIFFICULTY_BITS, amount_authority.clone());
+    let mut blockchain = Blockchain::new(DEFAULT_DIFFICULTY_BITS, amount_authority_key.clone());
 
     add_demo_public_key_block(
         &mut blockchain,
@@ -172,16 +171,8 @@ fn add_demo_public_key_block(
             did_submission_for_key_with_challenge(signing_key, role, &amount_key)
         })
         .collect::<Vec<_>>();
-    let amount_proof_key_authority_proof =
-        amount_proof_key_authority_proof(amount_authority_key, &submissions);
-
     blockchain
-        .add_public_key_block(
-            submissions,
-            amount,
-            amount_authority_proof,
-            amount_proof_key_authority_proof,
-        )
+        .add_public_key_block(submissions, amount, amount_authority_proof)
         .expect("public key ownership proofs should verify");
 }
 
@@ -214,28 +205,6 @@ fn did_key_for_secret_key(signing_key: &SecretKey) -> String {
 
 fn amount_authority_proof(signing_key: &SecretKey, amount: u8) -> OwnershipProof {
     let challenge = amount_authority_challenge(amount).expect("demo amount should be valid");
-    let signature = signing_key.sign(challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
-
-    OwnershipProof::new(challenge, base64url(&signature.compress()))
-}
-
-fn amount_proof_key_authority_proof(
-    signing_key: &SecretKey,
-    submissions: &[DidKeySubmission],
-) -> OwnershipProof {
-    let records = submissions
-        .iter()
-        .map(|submission| {
-            DidKeyRecord::new(
-                submission.did_key.clone(),
-                submission.role,
-                submission.proof.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let amount_proof_key =
-        amount_proof_key_for_records(&records).expect("demo signatures should aggregate");
-    let challenge = amount_proof_key_authority_challenge(&amount_proof_key);
     let signature = signing_key.sign(challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
 
     OwnershipProof::new(challenge, base64url(&signature.compress()))
@@ -354,16 +323,10 @@ mod tests {
         let amount_authority_proof = test_amount_authority_proof(7);
         let submissions =
             test_submissions_for_next_block(&blockchain, [3, 4, 5], 7, &amount_authority_proof);
-        let amount_proof_key_authority_proof = test_amount_proof_key_authority_proof(&submissions);
         let expected_did = submissions[0].did_key.clone();
 
         blockchain
-            .add_public_key_block(
-                submissions,
-                7,
-                amount_authority_proof,
-                amount_proof_key_authority_proof,
-            )
+            .add_public_key_block(submissions, 7, amount_authority_proof)
             .expect("ownership proof should verify");
 
         assert!(blockchain.is_valid());
@@ -418,13 +381,8 @@ mod tests {
     fn rejects_public_key_block_without_exactly_three_dids() {
         let mut blockchain = test_blockchain();
         let submissions = test_submissions([1, 2, 3])[0..2].to_vec();
-        let amount_proof_key_authority_proof = test_amount_proof_key_authority_proof(&submissions);
-        let result = blockchain.add_public_key_block(
-            submissions,
-            7,
-            test_amount_authority_proof(7),
-            amount_proof_key_authority_proof,
-        );
+        let result =
+            blockchain.add_public_key_block(submissions, 7, test_amount_authority_proof(7));
 
         assert!(result.is_err());
         assert_eq!(blockchain.chain.len(), 1);
@@ -438,13 +396,8 @@ mod tests {
             did_submission_for_key(&bls_secret_key(2), DidRole::Subject),
             did_submission_for_key(&bls_secret_key(3), DidRole::Subject),
         ];
-        let amount_proof_key_authority_proof = test_amount_proof_key_authority_proof(&submissions);
-        let result = blockchain.add_public_key_block(
-            submissions,
-            7,
-            test_amount_authority_proof(7),
-            amount_proof_key_authority_proof,
-        );
+        let result =
+            blockchain.add_public_key_block(submissions, 7, test_amount_authority_proof(7));
 
         assert!(result.is_err());
         assert_eq!(blockchain.chain.len(), 1);
@@ -458,13 +411,8 @@ mod tests {
             did_submission_for_key(&bls_secret_key(2), DidRole::Witness),
             did_submission_for_key(&bls_secret_key(3), DidRole::Witness),
         ];
-        let amount_proof_key_authority_proof = test_amount_proof_key_authority_proof(&submissions);
-        let result = blockchain.add_public_key_block(
-            submissions,
-            7,
-            test_amount_authority_proof(7),
-            amount_proof_key_authority_proof,
-        );
+        let result =
+            blockchain.add_public_key_block(submissions, 7, test_amount_authority_proof(7));
 
         assert!(result.is_err());
         assert_eq!(blockchain.chain.len(), 1);
@@ -646,7 +594,6 @@ mod tests {
             test_submissions([1, 2, 3]),
             100,
             OwnershipProof::new("invalid amount", ""),
-            OwnershipProof::new("invalid amount proof key", ""),
         );
 
         assert!(result.is_err());
@@ -675,20 +622,14 @@ mod tests {
         let amount_authority_proof = test_amount_authority_proof(7);
         let submissions =
             test_submissions_for_next_block(blockchain, key_bytes, 7, &amount_authority_proof);
-        let amount_proof_key_authority_proof = test_amount_proof_key_authority_proof(&submissions);
 
         blockchain
-            .add_public_key_block(
-                submissions,
-                7,
-                amount_authority_proof,
-                amount_proof_key_authority_proof,
-            )
+            .add_public_key_block(submissions, 7, amount_authority_proof)
             .expect("ownership proofs should verify");
     }
 
     fn test_blockchain() -> Blockchain {
-        Blockchain::new(12, test_amount_authority_did_key())
+        Blockchain::new(12, bls_secret_key(42))
     }
 
     fn test_amount_authority_did_key() -> String {
@@ -697,10 +638,6 @@ mod tests {
 
     fn test_amount_authority_proof(amount: u8) -> OwnershipProof {
         amount_authority_proof(&bls_secret_key(42), amount)
-    }
-
-    fn test_amount_proof_key_authority_proof(submissions: &[DidKeySubmission]) -> OwnershipProof {
-        amount_proof_key_authority_proof(&bls_secret_key(42), submissions)
     }
 
     trait TestBlockchainExt {
@@ -718,15 +655,8 @@ mod tests {
             amount: u8,
         ) -> Result<(), crate::did::OwnershipProofError> {
             let amount_authority_proof = test_amount_authority_proof(amount);
-            let amount_proof_key_authority_proof =
-                test_amount_proof_key_authority_proof(&submissions);
 
-            self.add_public_key_block(
-                submissions,
-                amount,
-                amount_authority_proof,
-                amount_proof_key_authority_proof,
-            )
+            self.add_public_key_block(submissions, amount, amount_authority_proof)
         }
     }
 
@@ -830,22 +760,15 @@ mod tests {
         let amount_authority_proof = test_amount_authority_proof(7);
         let submissions =
             test_submissions_for_next_block(&blockchain, key_bytes, 7, &amount_authority_proof);
-        let amount_proof_key_authority_proof = test_amount_proof_key_authority_proof(&submissions);
         let records = submissions
             .into_iter()
             .map(|submission| {
                 DidKeyRecord::new(submission.did_key, submission.role, submission.proof)
             })
             .collect();
+        let authority_key = bls_secret_key(42);
 
-        DidKeyBlock::new(
-            records,
-            7,
-            amount_authority_proof,
-            amount_proof_key_authority_proof,
-            &test_amount_authority_did_key(),
-            None,
-        )
-        .expect("test records should build a valid DID block")
+        DidKeyBlock::new(records, 7, amount_authority_proof, &authority_key, None)
+            .expect("test records should build a valid DID block")
     }
 }

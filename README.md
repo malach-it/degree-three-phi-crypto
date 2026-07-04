@@ -50,7 +50,7 @@ amount_proof_key =
   subject_signature + witness_signature + participant_signature
 ```
 
-The authority then signs the aggregate amount proof key:
+During block creation, the authority signs the aggregate amount proof key:
 
 ```text
 amount_proof_key_authority_signature =

@@ -1,7 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use blst::BLST_ERROR;
-use blst::min_pk::{AggregatePublicKey, AggregateSignature, PublicKey, Signature};
+use blst::min_pk::{AggregatePublicKey, AggregateSignature, PublicKey, SecretKey, Signature};
 use std::array::TryFromSliceError;
 use std::error::Error;
 use std::fmt;
@@ -235,8 +235,7 @@ impl DidKeyBlock {
         records: Vec<DidKeyRecord>,
         amount: u8,
         amount_authority_proof: OwnershipProof,
-        amount_proof_key_authority_proof: OwnershipProof,
-        authority_did_key: &str,
+        authority_signing_key: &SecretKey,
         previous_participant_did_key: Option<&str>,
     ) -> Result<Self, OwnershipProofError> {
         if records.len() != DIDS_PER_BLOCK {
@@ -246,23 +245,27 @@ impl DidKeyBlock {
             });
         }
 
+        let authority_did_key =
+            did_key_from_bls12_381_public_key(&authority_signing_key.sk_to_pk().compress());
         validate_amount(amount)?;
-        verify_amount_authority_proof(amount, authority_did_key, &amount_authority_proof)?;
+        verify_amount_authority_proof(amount, &authority_did_key, &amount_authority_proof)?;
         let amount_key = amount_key_for_block(
             &records,
             amount,
             &amount_authority_proof.signature,
-            authority_did_key,
+            &authority_did_key,
             previous_participant_did_key,
         )?;
         let amount_key_group = amount_key_group_for_block(
             &records,
             amount,
-            authority_did_key,
+            &authority_did_key,
             previous_participant_did_key,
         )?;
         let amount_keys = amount_keys_for_records(&records, amount, &amount_key_group)?;
         let amount_proof_key = amount_proof_key_for_records(&records)?;
+        let amount_proof_key_authority_proof =
+            sign_amount_proof_key_authority_proof(authority_signing_key, &amount_proof_key);
         let block = Self {
             records,
             amount,
@@ -273,10 +276,10 @@ impl DidKeyBlock {
         };
         block.verify_roles()?;
         block.verify_supported_did_keys()?;
-        block.verify_amount_key(authority_did_key, previous_participant_did_key)?;
+        block.verify_amount_key(&authority_did_key, previous_participant_did_key)?;
         block.verify_amount_proof_key()?;
         block.verify_amount_proof_challenges()?;
-        block.verify_amount_proof_key_authority_proof(authority_did_key)?;
+        block.verify_amount_proof_key_authority_proof(&authority_did_key)?;
         block.verify_ownership_proofs()?;
         Ok(block)
     }
@@ -685,6 +688,16 @@ pub fn amount_authority_challenge(amount: u8) -> Result<String, OwnershipProofEr
 
 pub fn amount_proof_key_authority_challenge(amount_proof_key: &str) -> String {
     format!("authorize phi-crypto amount proof key {amount_proof_key}")
+}
+
+fn sign_amount_proof_key_authority_proof(
+    signing_key: &SecretKey,
+    amount_proof_key: &str,
+) -> OwnershipProof {
+    let challenge = amount_proof_key_authority_challenge(amount_proof_key);
+    let signature = signing_key.sign(challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
+
+    OwnershipProof::new(challenge, base64url(&signature.compress()))
 }
 
 fn verify_amount_authority_proof(

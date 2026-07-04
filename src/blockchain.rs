@@ -1,19 +1,26 @@
 use crate::block::{Block, BlockData};
 use crate::did::{DidKeyBlock, DidKeySubmission, OwnershipProof, OwnershipProofError};
+use blst::min_pk::SecretKey;
 
 #[derive(Debug)]
 pub struct Blockchain {
     pub chain: Vec<Block>,
     difficulty_bits: u8,
+    amount_authority_key: SecretKey,
     amount_authority_did_key: String,
 }
 
 impl Blockchain {
-    pub fn new(difficulty_bits: u8, amount_authority_did_key: impl Into<String>) -> Self {
+    pub fn new(difficulty_bits: u8, amount_authority_key: SecretKey) -> Self {
+        let amount_authority_did_key = crate::did::did_key_from_bls12_381_public_key(
+            &amount_authority_key.sk_to_pk().compress(),
+        );
+
         Self {
             chain: vec![Block::genesis(difficulty_bits)],
             difficulty_bits,
-            amount_authority_did_key: amount_authority_did_key.into(),
+            amount_authority_key,
+            amount_authority_did_key,
         }
     }
 
@@ -22,7 +29,6 @@ impl Blockchain {
         submissions: Vec<DidKeySubmission>,
         amount: u8,
         amount_authority_proof: OwnershipProof,
-        amount_proof_key_authority_proof: OwnershipProof,
     ) -> Result<(), OwnershipProofError> {
         let records = submissions
             .into_iter()
@@ -38,8 +44,7 @@ impl Blockchain {
             records,
             amount,
             amount_authority_proof,
-            amount_proof_key_authority_proof,
-            &self.amount_authority_did_key,
+            &self.amount_authority_key,
             previous_participant.as_deref(),
         )?;
 
