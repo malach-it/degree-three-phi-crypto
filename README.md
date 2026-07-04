@@ -43,23 +43,25 @@ witness_signature = sign(witness_key, amount_key)
 participant_signature = sign(participant_key, amount_key)
 ```
 
-The block `amount_proof_key` is the aggregate of those signatures:
+The submitted `amount_proof_key` is the aggregate of those signatures:
 
 ```text
 amount_proof_key =
   subject_signature + witness_signature + participant_signature
 ```
 
-During block creation, the authority signs the aggregate amount proof key:
+During block creation, the block verifies the submitted aggregate and the
+authority signs the accepted amount proof key:
 
 ```text
 amount_proof_key_authority_signature =
   sign(authority_key, "authorize phi-crypto amount proof key {amount_proof_key}")
 ```
 
-Block verification recomputes the aggregate, checks that each party actually
-signed the block `amount_key`, and verifies the authority signature over the
-resulting `amount_proof_key`.
+Block verification recomputes the aggregate, checks that the submitted
+`amount_proof_key` matches it, checks that each party actually signed the block
+`amount_key`, and verifies the authority signature over the resulting
+`amount_proof_key`.
 
 ## Role Amount Keys
 

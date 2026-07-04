@@ -29,6 +29,7 @@ impl Blockchain {
         submissions: Vec<DidKeySubmission>,
         amount: u8,
         amount_authority_proof: OwnershipProof,
+        amount_proof_key: String,
     ) -> Result<(), OwnershipProofError> {
         let records = submissions
             .into_iter()
@@ -44,6 +45,7 @@ impl Blockchain {
             records,
             amount,
             amount_authority_proof,
+            amount_proof_key,
             &self.amount_authority_key,
             previous_participant.as_deref(),
         )?;

@@ -235,6 +235,7 @@ impl DidKeyBlock {
         records: Vec<DidKeyRecord>,
         amount: u8,
         amount_authority_proof: OwnershipProof,
+        amount_proof_key: String,
         authority_signing_key: &SecretKey,
         previous_participant_did_key: Option<&str>,
     ) -> Result<Self, OwnershipProofError> {
@@ -263,7 +264,6 @@ impl DidKeyBlock {
             previous_participant_did_key,
         )?;
         let amount_keys = amount_keys_for_records(&records, amount, &amount_key_group)?;
-        let amount_proof_key = amount_proof_key_for_records(&records)?;
         let amount_proof_key_authority_proof =
             sign_amount_proof_key_authority_proof(authority_signing_key, &amount_proof_key);
         let block = Self {
