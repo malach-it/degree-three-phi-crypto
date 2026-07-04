@@ -110,3 +110,15 @@ So the distinction is:
 
 This means the protocol can prove participation by known DIDs, but it is not a
 DID discovery mechanism.
+
+## Load Test
+
+Run parallel random token exchanges with:
+
+```bash
+cargo run --bin load_test -- --workers 4 --ops 250 --parties 32 --difficulty 1 --print-blocks
+```
+
+Omit `--print-blocks` for longer runs. The load test prints accepted/rejected
+operation counts, two-party proof checks, final chain validity, and elapsed
+time.
