@@ -9,8 +9,10 @@ verifying an amount proof protocol between three roles:
 - witness
 - participant
 
-Each public-key block stores three DID keys, one per role. The witness is a
-separate role, and only one witness is allowed per block.
+Each public-key block is now a receipt: it stores only the accepted
+`amount_proof_key` and the authority signature over that proof key. The amount,
+role records, role tokens, and party signatures are verified when the block is
+created, but they are not persisted in the block.
 
 ## Amount Protocol
 
@@ -63,10 +65,40 @@ amount_proof_key_authority_signature =
   sign(authority_key, "authorize phi-crypto amount proof key {amount_proof_key}")
 ```
 
-Block verification recomputes the role amount tokens, checks that each party
-signed the correct role token, checks that the submitted `amount_proof_key`
-matches the aggregate signatures, and verifies the authority signature over the
-resulting `amount_proof_key`.
+At block creation, the chain recomputes the role amount tokens, checks that
+each party signed the correct role token, checks that the submitted
+`amount_proof_key` matches the aggregate signatures, and verifies the authority
+signature over the resulting `amount_proof_key`.
+
+Later chain validation can verify the persisted receipt and block hash, but it
+cannot replay the full three-party transaction proof from the block alone
+because the block no longer stores the amount or DID records.
+
+## Three-Party Block Verification
+
+The three parties can still verify a block together if they retain or exchange
+the transaction witness data used at creation time:
+
+```text
+amount
+subject DID record and signature
+witness DID record and signature
+participant DID record and signature
+previous participant amount token, for chained transactions
+```
+
+Given that witness data and the stored block receipt, they verify:
+
+```text
+role amount tokens recompute from amount and DID records
+each party signature verifies its role amount token
+subject_signature + witness_signature + participant_signature == amount_proof_key
+amount_proof_key_authority_signature verifies authority approval of amount_proof_key
+```
+
+Without that external witness data, the stored block proves only that the
+authority approved the aggregate `amount_proof_key`; it does not reveal or
+reconstruct the three parties, their roles, or the amount.
 
 ## Can Two Parties Deduce The Third DID?
 

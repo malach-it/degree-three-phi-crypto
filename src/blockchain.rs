@@ -8,6 +8,7 @@ pub struct Blockchain {
     difficulty_bits: u8,
     amount_authority_key: SecretKey,
     amount_authority_did_key: String,
+    public_key_state: PublicKeyState,
 }
 
 impl Blockchain {
@@ -21,6 +22,7 @@ impl Blockchain {
             difficulty_bits,
             amount_authority_key,
             amount_authority_did_key,
+            public_key_state: PublicKeyState::default(),
         }
     }
 
@@ -34,66 +36,69 @@ impl Blockchain {
             .into_iter()
             .map(DidKeySubmission::into_verified_record)
             .collect::<Result<Vec<_>, _>>()?;
-        let previous_participant = self
-            .chain
-            .last()
-            .and_then(|block| public_key_block(block))
-            .and_then(|block| block.participant_did_key().ok())
-            .map(str::to_string);
-        let previous_participant_amount = self
-            .chain
-            .last()
-            .and_then(|block| public_key_block(block))
-            .map(|block| block.amount);
-        let previous_participant_amount_token = self
-            .chain
-            .last()
-            .and_then(|block| public_key_block(block))
-            .map(|block| block.amount_tokens.participant.clone());
+        let previous_state = self.public_key_state.clone();
+        let amount_tokens = crate::did::amount_tokens_for_records(
+            &records,
+            amount,
+            &crate::did::amount_token_group_for_block(
+                &records,
+                amount,
+                &self.amount_authority_did_key,
+                previous_state.participant_did_key.as_deref(),
+                previous_state.amount,
+                previous_state.participant_amount_token.as_deref(),
+            )?,
+        )?;
+        let participant_did_key = participant_did_key_for_records(&records)?.to_string();
         let block = DidKeyBlock::new(
             records,
             amount,
             amount_proof_key,
             &self.amount_authority_key,
-            previous_participant.as_deref(),
-            previous_participant_amount,
-            previous_participant_amount_token.as_deref(),
+            previous_state.participant_did_key.as_deref(),
+            previous_state.amount,
+            previous_state.participant_amount_token.as_deref(),
         )?;
 
         self.add_block(BlockData::PublicKeys(block));
+        self.public_key_state = PublicKeyState {
+            participant_did_key: Some(participant_did_key),
+            amount: Some(amount),
+            participant_amount_token: Some(amount_tokens.participant),
+        };
         Ok(())
     }
 
     pub fn public_key_blocks_are_valid(&self) -> bool {
-        let mut previous_participant: Option<String> = None;
-        let mut previous_participant_amount: Option<u8> = None;
-        let mut previous_participant_amount_token: Option<String> = None;
-
         for block in &self.chain {
             let BlockData::PublicKeys(block) = &block.data else {
                 continue;
             };
 
-            if block.verify_roles().is_err()
-                || block.verify_supported_did_keys().is_err()
-                || block
-                    .verify_mining_proof(
-                        &self.amount_authority_did_key,
-                        previous_participant.as_deref(),
-                        previous_participant_amount,
-                        previous_participant_amount_token.as_deref(),
-                    )
-                    .is_err()
+            if block
+                .verify_mining_proof(&self.amount_authority_did_key)
+                .is_err()
             {
                 return false;
             }
-
-            previous_participant = block.participant_did_key().ok().map(str::to_string);
-            previous_participant_amount = Some(block.amount);
-            previous_participant_amount_token = Some(block.amount_tokens.participant.clone());
         }
 
         true
+    }
+
+    #[allow(dead_code)]
+    pub fn current_participant_did_key(&self) -> Option<&str> {
+        self.public_key_state.participant_did_key.as_deref()
+    }
+
+    #[allow(dead_code)]
+    pub fn current_amount(&self) -> Option<u8> {
+        self.public_key_state.amount
+    }
+
+    #[allow(dead_code)]
+    pub fn current_participant_amount_token(&self) -> Option<&str> {
+        self.public_key_state.participant_amount_token.as_deref()
     }
 
     fn add_block(&mut self, data: BlockData) {
@@ -125,9 +130,22 @@ impl Blockchain {
     }
 }
 
-fn public_key_block(block: &Block) -> Option<&DidKeyBlock> {
-    match &block.data {
-        BlockData::Genesis => None,
-        BlockData::PublicKeys(block) => Some(block),
-    }
+#[derive(Debug, Clone, Default)]
+struct PublicKeyState {
+    participant_did_key: Option<String>,
+    amount: Option<u8>,
+    participant_amount_token: Option<String>,
+}
+
+fn participant_did_key_for_records(
+    records: &[crate::did::DidKeyRecord],
+) -> Result<&str, OwnershipProofError> {
+    records
+        .iter()
+        .find(|record| record.role == crate::did::DidRole::Participant)
+        .map(|record| record.did_key.as_str())
+        .ok_or(OwnershipProofError::WrongParticipantCount {
+            expected: 1,
+            actual: 0,
+        })
 }

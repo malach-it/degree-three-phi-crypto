@@ -10,8 +10,8 @@ use blockchain::Blockchain;
 use blst::min_pk::SecretKey;
 use did::{
     BLS_SIGNATURE_DST, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
-    amount_authority_challenge, amount_proof_key_for_records, amount_token_for_block,
-    amount_tokens_for_records, did_key_from_bls12_381_public_key, verify_did_key_ownership,
+    amount_proof_key_for_records, amount_token_group_for_block, amount_tokens_for_records,
+    did_key_from_bls12_381_public_key, verify_did_key_ownership,
 };
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -131,7 +131,7 @@ fn run_worker(
     rng: &mut XorShift64,
     blockchain: &Arc<Mutex<Blockchain>>,
     parties: &[Party],
-    amount_authority_key: &SecretKey,
+    _amount_authority_key: &SecretKey,
     amount_authority_did_key: &str,
     print_blocks: bool,
 ) -> WorkerStats {
@@ -147,24 +147,21 @@ fn run_worker(
             .lock()
             .expect("blockchain mutex should not be poisoned");
         let exchange = random_exchange(rng, &blockchain, parties);
-        let amount_authority_signature =
-            sign_amount_authority(amount_authority_key, exchange.amount);
-        let amount_token = amount_token_for_exchange(
-            &blockchain,
-            &exchange,
-            &amount_authority_signature,
-            amount_authority_did_key,
-        );
         let amount_token_group =
-            amount_token_group_for_exchange(&amount_token, amount_authority_did_key);
+            amount_token_group_for_exchange(&blockchain, &exchange, amount_authority_did_key);
         let records = exchange_records_without_proofs(&exchange);
         let amount_tokens =
             amount_tokens_for_records(&records, exchange.amount, &amount_token_group)
                 .expect("load-test amount tokens should compute");
         let submissions = exchange_submissions(&exchange, &amount_tokens);
         let amount_proof_key = amount_proof_key_for_submissions(&submissions);
+        let proof_records = records_for_submissions(&submissions);
 
-        match blockchain.add_public_key_block(submissions, exchange.amount, amount_proof_key) {
+        match blockchain.add_public_key_block(
+            submissions,
+            exchange.amount,
+            amount_proof_key.clone(),
+        ) {
             Ok(()) => {
                 stats.accepted += 1;
 
@@ -172,13 +169,23 @@ fn run_worker(
                     .chain
                     .last()
                     .expect("accepted operation should append a block");
-                let check_stats = verify_two_party_third_checks(block);
+                let check_stats = verify_two_party_third_checks(
+                    block,
+                    &proof_records,
+                    &amount_tokens,
+                    &amount_proof_key,
+                );
                 stats.third_party_checks += check_stats.total;
                 stats.third_party_check_failures += check_stats.failed;
 
                 if print_blocks {
-                    print_created_block(block);
-                    print_two_party_third_check_results(block);
+                    print_created_block(block, &exchange, &amount_proof_key);
+                    print_two_party_third_check_results(
+                        block,
+                        &proof_records,
+                        &amount_tokens,
+                        &amount_proof_key,
+                    );
                     println!("\n\n");
                 }
             }
@@ -198,8 +205,13 @@ struct ThirdPartyCheckStats {
     failed: usize,
 }
 
-fn verify_two_party_third_checks(block: &block::Block) -> ThirdPartyCheckStats {
-    let BlockData::PublicKeys(did_block) = &block.data else {
+fn verify_two_party_third_checks(
+    block: &block::Block,
+    records: &[DidKeyRecord],
+    amount_tokens: &did::AmountTokens,
+    amount_proof_key: &str,
+) -> ThirdPartyCheckStats {
+    let BlockData::PublicKeys(_) = &block.data else {
         return ThirdPartyCheckStats {
             total: 0,
             failed: 0,
@@ -213,7 +225,7 @@ fn verify_two_party_third_checks(block: &block::Block) -> ThirdPartyCheckStats {
     for target_role in [DidRole::Subject, DidRole::Witness, DidRole::Participant] {
         stats.total += 1;
 
-        if !two_party_third_check_passes(did_block, target_role) {
+        if !two_party_third_check_passes(records, amount_tokens, amount_proof_key, target_role) {
             stats.failed += 1;
             println!(
                 "load_test third_party_check_failed block_index {} verify {}",
@@ -226,13 +238,19 @@ fn verify_two_party_third_checks(block: &block::Block) -> ThirdPartyCheckStats {
     stats
 }
 
-fn print_two_party_third_check_results(block: &block::Block) {
-    let BlockData::PublicKeys(did_block) = &block.data else {
+fn print_two_party_third_check_results(
+    block: &block::Block,
+    records: &[DidKeyRecord],
+    amount_tokens: &did::AmountTokens,
+    amount_proof_key: &str,
+) {
+    let BlockData::PublicKeys(_) = &block.data else {
         return;
     };
 
     for target_role in [DidRole::Subject, DidRole::Witness, DidRole::Participant] {
-        let result = two_party_third_check_result(did_block, target_role);
+        let result =
+            two_party_third_check_result(records, amount_tokens, amount_proof_key, target_role);
 
         println!(
             "load_test proof_result block_index {} verifiers {} verify {} challenge {} signature {} aggregate {} passed {}",
@@ -247,8 +265,13 @@ fn print_two_party_third_check_results(block: &block::Block) {
     }
 }
 
-fn two_party_third_check_passes(did_block: &did::DidKeyBlock, target_role: DidRole) -> bool {
-    two_party_third_check_result(did_block, target_role).passed()
+fn two_party_third_check_passes(
+    records: &[DidKeyRecord],
+    amount_tokens: &did::AmountTokens,
+    amount_proof_key: &str,
+    target_role: DidRole,
+) -> bool {
+    two_party_third_check_result(records, amount_tokens, amount_proof_key, target_role).passed()
 }
 
 #[derive(Debug)]
@@ -273,18 +296,20 @@ impl ThirdPartyCheckResult {
 }
 
 fn two_party_third_check_result(
-    did_block: &did::DidKeyBlock,
+    records: &[DidKeyRecord],
+    amount_tokens: &did::AmountTokens,
+    amount_proof_key: &str,
     target_role: DidRole,
 ) -> ThirdPartyCheckResult {
-    let Some(target_record) = record_for_role(did_block, target_role) else {
+    let Some(target_record) = record_for_role(records, target_role) else {
         return ThirdPartyCheckResult::failed();
     };
-    let challenge_matches_block = target_record.proof.challenge
-        == amount_token_for_role(&did_block.amount_tokens, target_role);
+    let challenge_matches_block =
+        target_record.proof.challenge == amount_token_for_role(amount_tokens, target_role);
     let target_signature_valid =
         verify_did_key_ownership(&target_record.did_key, &target_record.proof).is_ok();
-    let block_result_matches = amount_proof_key_for_records(&did_block.records)
-        .map(|amount_proof_key| amount_proof_key == did_block.amount_proof_key)
+    let block_result_matches = amount_proof_key_for_records(records)
+        .map(|actual| actual == amount_proof_key)
         .unwrap_or(false);
 
     ThirdPartyCheckResult {
@@ -294,30 +319,25 @@ fn two_party_third_check_result(
     }
 }
 
-fn print_created_block(block: &block::Block) {
-    let BlockData::PublicKeys(did_block) = &block.data else {
+fn print_created_block(block: &block::Block, exchange: &Exchange<'_>, amount_proof_key: &str) {
+    let BlockData::PublicKeys(_) = &block.data else {
         return;
     };
-    let subject = did_key_for_role(did_block, DidRole::Subject).expect("block has subject");
-    let witness = did_key_for_role(did_block, DidRole::Witness).expect("block has witness");
-    let participant =
-        did_key_for_role(did_block, DidRole::Participant).expect("block has participant");
 
     println!(
-        "load_test block_created index {}\n hash {}\n amount {}\n subject {}\n witness {}\n participant {}\n amount_token {}\n amount_proof_key {}\n",
+        "load_test block_created index {}\n hash {}\n amount {}\n subject {}\n witness {}\n participant {}\n amount_proof_key {}\n",
         block.index,
         block.hash,
-        did_block.amount,
-        subject,
-        witness,
-        participant,
-        did_block.amount_token,
-        did_block.amount_proof_key
+        exchange.amount,
+        exchange.subject.did_key,
+        exchange.witness.did_key,
+        exchange.participant.did_key,
+        amount_proof_key
     );
 }
 
-fn record_for_role(did_block: &did::DidKeyBlock, role: DidRole) -> Option<&DidKeyRecord> {
-    did_block.records.iter().find(|record| record.role == role)
+fn record_for_role(records: &[DidKeyRecord], role: DidRole) -> Option<&DidKeyRecord> {
+    records.iter().find(|record| record.role == role)
 }
 
 fn verifier_roles_for(target_role: DidRole) -> String {
@@ -368,49 +388,25 @@ fn random_exchange<'a>(
     }
 }
 
-fn amount_token_for_exchange(
+fn amount_token_group_for_exchange(
     blockchain: &Blockchain,
     exchange: &Exchange<'_>,
-    amount_authority_signature: &str,
     amount_authority_did_key: &str,
 ) -> String {
     let records = exchange_records_without_proofs(exchange);
-    let previous_participant = blockchain
-        .chain
-        .last()
-        .and_then(|block| match &block.data {
-            BlockData::Genesis => None,
-            BlockData::PublicKeys(did_block) => did_key_for_role(did_block, DidRole::Participant),
-        })
-        .map(String::as_str);
-    let previous_participant_amount = blockchain.chain.last().and_then(|block| match &block.data {
-        BlockData::Genesis => None,
-        BlockData::PublicKeys(did_block) => Some(did_block.amount),
-    });
-    let previous_participant_amount_token =
-        blockchain.chain.last().and_then(|block| match &block.data {
-            BlockData::Genesis => None,
-            BlockData::PublicKeys(did_block) => Some(did_block.amount_tokens.participant.as_str()),
-        });
+    let previous_participant = blockchain.current_participant_did_key();
+    let previous_participant_amount = blockchain.current_amount();
+    let previous_participant_amount_token = blockchain.current_participant_amount_token();
 
-    amount_token_for_block(
+    amount_token_group_for_block(
         &records,
         exchange.amount,
-        amount_authority_signature,
         amount_authority_did_key,
         previous_participant,
         previous_participant_amount,
         previous_participant_amount_token,
     )
-    .expect("load-test amount token should compute")
-}
-
-fn amount_token_group_for_exchange(amount_token: &str, amount_authority_did_key: &str) -> String {
-    if amount_token.starts_with("did:key:") {
-        amount_token.to_string()
-    } else {
-        amount_authority_did_key.to_string()
-    }
+    .expect("load-test amount token group should compute")
 }
 
 fn exchange_submissions(
@@ -460,7 +456,13 @@ fn exchange_records_without_proofs(exchange: &Exchange<'_>) -> Vec<DidKeyRecord>
 }
 
 fn amount_proof_key_for_submissions(submissions: &[DidKeySubmission]) -> String {
-    let records = submissions
+    let records = records_for_submissions(submissions);
+
+    amount_proof_key_for_records(&records).expect("load-test signatures should aggregate")
+}
+
+fn records_for_submissions(submissions: &[DidKeySubmission]) -> Vec<DidKeyRecord> {
+    submissions
         .iter()
         .map(|submission| {
             DidKeyRecord::new(
@@ -469,43 +471,19 @@ fn amount_proof_key_for_submissions(submissions: &[DidKeySubmission]) -> String 
                 submission.proof.clone(),
             )
         })
-        .collect::<Vec<_>>();
-
-    amount_proof_key_for_records(&records).expect("load-test signatures should aggregate")
+        .collect()
 }
 
 fn current_owner_index(blockchain: &Blockchain, parties: &[Party]) -> Option<usize> {
-    let owner_did_key = blockchain
-        .chain
-        .iter()
-        .rev()
-        .find_map(|block| match &block.data {
-            BlockData::Genesis => None,
-            BlockData::PublicKeys(did_block) => did_key_for_role(did_block, DidRole::Participant),
-        })?;
+    let owner_did_key = blockchain.current_participant_did_key()?;
 
     parties
         .iter()
-        .position(|party| party.did_key == *owner_did_key)
+        .position(|party| party.did_key == owner_did_key)
 }
 
 fn current_owner_amount(blockchain: &Blockchain) -> Option<u8> {
-    blockchain
-        .chain
-        .iter()
-        .rev()
-        .find_map(|block| match &block.data {
-            BlockData::Genesis => None,
-            BlockData::PublicKeys(did_block) => Some(did_block.amount),
-        })
-}
-
-fn did_key_for_role(did_block: &did::DidKeyBlock, role: DidRole) -> Option<&String> {
-    did_block
-        .records
-        .iter()
-        .find(|record| record.role == role)
-        .map(|record| &record.did_key)
+    blockchain.current_amount()
 }
 
 fn random_distinct_index(rng: &mut XorShift64, len: usize, excluded: &[usize]) -> usize {
@@ -515,13 +493,6 @@ fn random_distinct_index(rng: &mut XorShift64, len: usize, excluded: &[usize]) -
             return index;
         }
     }
-}
-
-fn sign_amount_authority(signing_key: &SecretKey, amount: u8) -> String {
-    let challenge = amount_authority_challenge(amount).expect("load-test amount should be valid");
-    let signature = signing_key.sign(challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
-
-    base64url(&signature.compress())
 }
 
 fn did_key_for_secret_key(signing_key: &SecretKey) -> String {
