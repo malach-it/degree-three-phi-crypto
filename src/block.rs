@@ -42,6 +42,21 @@ impl Block {
         let timestamp = unix_timestamp();
         let mut nonce = 0;
 
+        if matches!(&data, BlockData::PublicKeys(_)) {
+            let hash_bytes = calculate_hash_bytes(index, timestamp, &data, &previous_hash, nonce);
+            let proof_square = leading_bits_as_u128(&hash_bytes, difficulty_bits);
+
+            return Self {
+                index,
+                timestamp,
+                data,
+                previous_hash,
+                nonce,
+                hash: bytes_to_hex(&hash_bytes),
+                proof_square,
+            };
+        }
+
         loop {
             let hash_bytes = calculate_hash_bytes(index, timestamp, &data, &previous_hash, nonce);
             let proof_square = leading_bits_as_u128(&hash_bytes, difficulty_bits);
@@ -66,7 +81,7 @@ impl Block {
         self.index == previous.index + 1
             && self.previous_hash == previous.hash
             && self.hash == self.recalculate_hash()
-            && self.proves_square(difficulty_bits)
+            && self.has_valid_block_seal(difficulty_bits)
     }
 
     pub fn recalculate_hash(&self) -> String {
@@ -90,6 +105,23 @@ impl Block {
         let proof_square = leading_bits_as_u128(&hash_bytes, difficulty_bits);
 
         self.proof_square == proof_square && is_perfect_square(proof_square)
+    }
+
+    fn has_valid_block_seal(&self, difficulty_bits: u8) -> bool {
+        let hash_bytes = calculate_hash_bytes(
+            self.index,
+            self.timestamp,
+            &self.data,
+            &self.previous_hash,
+            self.nonce,
+        );
+        let proof_square = leading_bits_as_u128(&hash_bytes, difficulty_bits);
+
+        self.proof_square == proof_square
+            && match &self.data {
+                BlockData::Genesis => is_perfect_square(proof_square),
+                BlockData::PublicKeys(_) => true,
+            }
     }
 }
 

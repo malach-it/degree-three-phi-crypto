@@ -13,11 +13,13 @@ const BLS12_381_G1_DID_KEY_LENGTH: usize =
     BLS12_381_G1_DID_KEY_PREFIX.len() + BLS12_381_G1_PUBLIC_KEY_LENGTH;
 pub const BLS_SIGNATURE_DST: &[u8] = b"PHI_CRYPTO_BLS12_381_PROOF_V1";
 pub const DIDS_PER_BLOCK: usize = 3;
+pub const MAX_AMOUNT: u8 = 99;
 
 #[derive(Debug, Clone)]
 pub struct DidKeyRecord {
     pub did_key: String,
     pub role: DidRole,
+    pub proof: OwnershipProof,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +32,17 @@ pub enum DidRole {
 #[derive(Debug, Clone)]
 pub struct DidKeyBlock {
     pub records: Vec<DidKeyRecord>,
+    pub amount: u8,
+    pub amount_key: String,
+    pub amount_keys: AmountKeys,
     pub proof_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AmountKeys {
+    pub subject: String,
+    pub witness: String,
+    pub participant: String,
 }
 
 #[derive(Debug, Clone)]
@@ -48,17 +60,48 @@ pub struct OwnershipProof {
 
 #[derive(Debug)]
 pub enum OwnershipProofError {
-    WrongDidCount { expected: usize, actual: usize },
-    WrongSubjectCount { expected: usize, actual: usize },
-    WrongWitnessCount { expected: usize, actual: usize },
+    WrongDidCount {
+        expected: usize,
+        actual: usize,
+    },
+    WrongSubjectCount {
+        expected: usize,
+        actual: usize,
+    },
+    WrongWitnessCount {
+        expected: usize,
+        actual: usize,
+    },
+    WrongParticipantCount {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidAmount {
+        amount: u8,
+    },
     UnsupportedDidKey,
     InvalidDidKeyEncoding(bs58::decode::Error),
-    InvalidDidKeyLength { expected: usize, actual: usize },
+    InvalidDidKeyLength {
+        expected: usize,
+        actual: usize,
+    },
     InvalidPublicKeyLength(TryFromSliceError),
     InvalidSignatureEncoding(base64::DecodeError),
     InvalidPublicKey(BLST_ERROR),
     InvalidProofKey(BLST_ERROR),
-    ProofKeyDoesNotMatch { expected: String, actual: String },
+    InvalidAmountKey(BLST_ERROR),
+    AmountAuthorityKeyDoesNotMatch {
+        expected: String,
+        actual: String,
+    },
+    AmountKeysDoNotMatch {
+        expected: AmountKeys,
+        actual: AmountKeys,
+    },
+    ProofKeyDoesNotMatch {
+        expected: String,
+        actual: String,
+    },
     InvalidSignature(BLST_ERROR),
 }
 
@@ -73,6 +116,15 @@ impl fmt::Display for OwnershipProofError {
             }
             Self::WrongWitnessCount { expected, actual } => {
                 write!(f, "expected {expected} witness DID in block, got {actual}")
+            }
+            Self::WrongParticipantCount { expected, actual } => {
+                write!(
+                    f,
+                    "expected {expected} participant DID in block, got {actual}"
+                )
+            }
+            Self::InvalidAmount { amount } => {
+                write!(f, "amount must be between 1 and {MAX_AMOUNT}, got {amount}")
             }
             Self::UnsupportedDidKey => write!(f, "only did:key BLS12-381 G1 keys are supported"),
             Self::InvalidDidKeyEncoding(error) => {
@@ -92,6 +144,19 @@ impl fmt::Display for OwnershipProofError {
             }
             Self::InvalidPublicKey(error) => write!(f, "public key is invalid: {error:?}"),
             Self::InvalidProofKey(error) => write!(f, "proof key is invalid: {error:?}"),
+            Self::InvalidAmountKey(error) => write!(f, "amount key is invalid: {error:?}"),
+            Self::AmountAuthorityKeyDoesNotMatch { expected, actual } => {
+                write!(
+                    f,
+                    "amount authority key mismatch: expected {expected}, got {actual}"
+                )
+            }
+            Self::AmountKeysDoNotMatch { expected, actual } => {
+                write!(
+                    f,
+                    "amount keys mismatch: expected {expected:?}, got {actual:?}"
+                )
+            }
             Self::ProofKeyDoesNotMatch { expected, actual } => {
                 write!(f, "proof key mismatch: expected {expected}, got {actual}")
             }
@@ -105,18 +170,21 @@ impl fmt::Display for OwnershipProofError {
 impl Error for OwnershipProofError {}
 
 impl DidKeyRecord {
-    pub fn new(did_key: impl Into<String>, role: DidRole) -> Self {
+    pub fn new(did_key: impl Into<String>, role: DidRole, proof: OwnershipProof) -> Self {
         Self {
             did_key: did_key.into(),
             role,
+            proof,
         }
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
         format!(
-            "type=did-key;did_key={};role={}",
+            "type=did-key;did_key={};role={};challenge={};signature={}",
             self.did_key,
-            self.role.as_str()
+            self.role.as_str(),
+            self.proof.challenge,
+            self.proof.signature
         )
         .into_bytes()
     }
@@ -124,10 +192,19 @@ impl DidKeyRecord {
     pub fn verify_supported_did_key(&self) -> Result<(), OwnershipProofError> {
         bls12_381_public_key_from_did_key(&self.did_key).map(|_| ())
     }
+
+    pub fn verify_ownership_proof(&self) -> Result<(), OwnershipProofError> {
+        verify_did_key_ownership(&self.did_key, &self.proof)
+    }
 }
 
 impl DidKeyBlock {
-    pub fn new(records: Vec<DidKeyRecord>) -> Result<Self, OwnershipProofError> {
+    pub fn new(
+        records: Vec<DidKeyRecord>,
+        amount: u8,
+        authority_did_key: &str,
+        previous_participant_did_key: Option<&str>,
+    ) -> Result<Self, OwnershipProofError> {
         if records.len() != DIDS_PER_BLOCK {
             return Err(OwnershipProofError::WrongDidCount {
                 expected: DIDS_PER_BLOCK,
@@ -135,10 +212,26 @@ impl DidKeyBlock {
             });
         }
 
+        validate_amount(amount)?;
+        let amount_key = amount_key_for_block(
+            &records,
+            amount,
+            authority_did_key,
+            previous_participant_did_key,
+        )?;
+        let amount_keys = amount_keys_for_records(&records, amount, &amount_key)?;
         let proof_key = proof_key_for_records(&records)?;
-        let block = Self { records, proof_key };
+        let block = Self {
+            records,
+            amount,
+            amount_key,
+            amount_keys,
+            proof_key,
+        };
         block.verify_roles()?;
         block.verify_supported_did_keys()?;
+        block.verify_amount_key(authority_did_key, previous_participant_did_key)?;
+        block.verify_ownership_proofs()?;
         block.verify_proof_key()?;
         Ok(block)
     }
@@ -154,7 +247,10 @@ impl DidKeyBlock {
             .join("|");
 
         format!(
-            "type=did-key-block;proof_key={};records={records}",
+            "type=did-key-block;amount={};amount_key={};amount_keys={};proof_key={};records={records}",
+            self.amount,
+            self.amount_key,
+            self.amount_keys.canonical_string(),
             self.proof_key
         )
         .into_bytes()
@@ -175,6 +271,21 @@ impl DidKeyBlock {
         Ok(())
     }
 
+    pub fn verify_ownership_proofs(&self) -> Result<(), OwnershipProofError> {
+        if self.records.len() != DIDS_PER_BLOCK {
+            return Err(OwnershipProofError::WrongDidCount {
+                expected: DIDS_PER_BLOCK,
+                actual: self.records.len(),
+            });
+        }
+
+        for record in &self.records {
+            record.verify_ownership_proof()?;
+        }
+
+        Ok(())
+    }
+
     pub fn verify_proof_key(&self) -> Result<(), OwnershipProofError> {
         let actual = proof_key_for_records(&self.records)?;
 
@@ -188,6 +299,57 @@ impl DidKeyBlock {
         }
     }
 
+    pub fn verify_amount_key(
+        &self,
+        authority_did_key: &str,
+        previous_participant_did_key: Option<&str>,
+    ) -> Result<(), OwnershipProofError> {
+        let actual_amount_key = amount_key_for_block(
+            &self.records,
+            self.amount,
+            authority_did_key,
+            previous_participant_did_key,
+        )?;
+        if self.amount_key != actual_amount_key {
+            return Err(OwnershipProofError::AmountAuthorityKeyDoesNotMatch {
+                expected: self.amount_key.clone(),
+                actual: actual_amount_key,
+            });
+        }
+
+        let actual = amount_keys_for_records(&self.records, self.amount, &self.amount_key)?;
+
+        if self.amount_keys == actual {
+            Ok(())
+        } else {
+            Err(OwnershipProofError::AmountKeysDoNotMatch {
+                expected: self.amount_keys.clone(),
+                actual,
+            })
+        }
+    }
+
+    pub fn verify_mining_proof(
+        &self,
+        authority_did_key: &str,
+        previous_participant_did_key: Option<&str>,
+    ) -> Result<(), OwnershipProofError> {
+        self.verify_amount_key(authority_did_key, previous_participant_did_key)?;
+        self.verify_ownership_proofs()
+    }
+
+    pub fn participant_did_key(&self) -> Result<&str, OwnershipProofError> {
+        self.did_key_for_role(DidRole::Participant)
+    }
+
+    fn did_key_for_role(&self, role: DidRole) -> Result<&str, OwnershipProofError> {
+        self.records
+            .iter()
+            .find(|record| record.role == role)
+            .map(|record| record.did_key.as_str())
+            .ok_or_else(|| missing_role_error(role))
+    }
+
     pub fn verify_roles(&self) -> Result<(), OwnershipProofError> {
         let subject_count = self
             .records
@@ -198,6 +360,11 @@ impl DidKeyBlock {
             .records
             .iter()
             .filter(|record| record.role == DidRole::Witness)
+            .count();
+        let participant_count = self
+            .records
+            .iter()
+            .filter(|record| record.role == DidRole::Participant)
             .count();
 
         if subject_count != 1 {
@@ -214,7 +381,23 @@ impl DidKeyBlock {
             });
         }
 
+        if participant_count != 1 {
+            return Err(OwnershipProofError::WrongParticipantCount {
+                expected: 1,
+                actual: participant_count,
+            });
+        }
+
         Ok(())
+    }
+}
+
+impl AmountKeys {
+    fn canonical_string(&self) -> String {
+        format!(
+            "subject={};witness={};participant={}",
+            self.subject, self.witness, self.participant
+        )
     }
 }
 
@@ -230,7 +413,7 @@ impl DidKeySubmission {
     pub fn into_verified_record(self) -> Result<DidKeyRecord, OwnershipProofError> {
         verify_did_key_ownership(&self.did_key, &self.proof)?;
 
-        Ok(DidKeyRecord::new(self.did_key, self.role))
+        Ok(DidKeyRecord::new(self.did_key, self.role, self.proof))
     }
 }
 
@@ -299,6 +482,109 @@ pub fn proof_key_for_records(records: &[DidKeyRecord]) -> Result<String, Ownersh
     Ok(did_key_from_bls12_381_public_key(&proof_key))
 }
 
+pub fn amount_key_for_block(
+    records: &[DidKeyRecord],
+    amount: u8,
+    authority_did_key: &str,
+    previous_participant_did_key: Option<&str>,
+) -> Result<String, OwnershipProofError> {
+    let authority_amount_key = amount_key_for_did_key(authority_did_key, amount)?;
+    let Some(previous_participant_did_key) = previous_participant_did_key else {
+        return Ok(authority_amount_key);
+    };
+    let current_subject_did_key = records
+        .iter()
+        .find(|record| record.role == DidRole::Subject)
+        .map(|record| record.did_key.as_str())
+        .ok_or_else(|| missing_role_error(DidRole::Subject))?;
+
+    if current_subject_did_key != previous_participant_did_key {
+        return Ok(authority_amount_key);
+    }
+
+    let authority_amount_public_key = public_key_from_did_key(&authority_amount_key)?;
+    let previous_participant_public_key = public_key_from_did_key(previous_participant_did_key)?;
+    let current_subject_public_key = public_key_from_did_key(current_subject_did_key)?;
+
+    aggregate_public_keys(&[
+        &authority_amount_public_key,
+        &previous_participant_public_key,
+        &current_subject_public_key,
+    ])
+}
+
+pub fn amount_keys_for_records(
+    records: &[DidKeyRecord],
+    amount: u8,
+    amount_key: &str,
+) -> Result<AmountKeys, OwnershipProofError> {
+    validate_amount(amount)?;
+    let amount_public_key = public_key_from_did_key(amount_key)?;
+
+    Ok(AmountKeys {
+        subject: amount_key_for_role(records, DidRole::Subject, amount, &amount_public_key)?,
+        witness: amount_key_for_role(records, DidRole::Witness, amount, &amount_public_key)?,
+        participant: amount_key_for_role(
+            records,
+            DidRole::Participant,
+            amount,
+            &amount_public_key,
+        )?,
+    })
+}
+
+fn amount_key_for_role(
+    records: &[DidKeyRecord],
+    role: DidRole,
+    amount: u8,
+    amount_public_key: &PublicKey,
+) -> Result<String, OwnershipProofError> {
+    let record = records
+        .iter()
+        .find(|record| record.role == role)
+        .ok_or_else(|| missing_role_error(role))?;
+    let role_amount_key = amount_key_for_did_key(&record.did_key, amount)?;
+    let role_public_key = public_key_from_did_key(&role_amount_key)?;
+
+    aggregate_public_keys(&[amount_public_key, &role_public_key])
+}
+
+pub fn amount_key_for_did_key(did_key: &str, amount: u8) -> Result<String, OwnershipProofError> {
+    validate_amount(amount)?;
+    let public_key = public_key_from_did_key(did_key)?;
+    let public_key_refs = (0..amount).map(|_| &public_key).collect::<Vec<_>>();
+    let aggregate = AggregatePublicKey::aggregate(&public_key_refs, true)
+        .map_err(OwnershipProofError::InvalidAmountKey)?;
+    let amount_key = aggregate.to_public_key().compress();
+
+    Ok(did_key_from_bls12_381_public_key(&amount_key))
+}
+
+fn aggregate_public_keys(public_keys: &[&PublicKey]) -> Result<String, OwnershipProofError> {
+    let aggregate = AggregatePublicKey::aggregate(public_keys, true)
+        .map_err(OwnershipProofError::InvalidAmountKey)?;
+    let amount_key = aggregate.to_public_key().compress();
+
+    Ok(did_key_from_bls12_381_public_key(&amount_key))
+}
+
+fn missing_role_error(role: DidRole) -> OwnershipProofError {
+    match role {
+        DidRole::Subject => OwnershipProofError::WrongSubjectCount {
+            expected: 1,
+            actual: 0,
+        },
+        DidRole::Witness => OwnershipProofError::WrongWitnessCount {
+            expected: 1,
+            actual: 0,
+        },
+        DidRole::Participant => OwnershipProofError::WrongParticipantCount {
+            expected: 1,
+            actual: 0,
+        },
+    }
+}
+
 pub fn verify_did_key_ownership(
     did_key: &str,
     proof: &OwnershipProof,
@@ -324,6 +610,14 @@ pub fn verify_did_key_ownership(
         Ok(())
     } else {
         Err(OwnershipProofError::InvalidSignature(result))
+    }
+}
+
+fn validate_amount(amount: u8) -> Result<(), OwnershipProofError> {
+    if (1..=MAX_AMOUNT).contains(&amount) {
+        Ok(())
+    } else {
+        Err(OwnershipProofError::InvalidAmount { amount })
     }
 }
 
