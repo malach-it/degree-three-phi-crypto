@@ -1,5 +1,5 @@
 use crate::block::{Block, BlockData};
-use crate::did::{DidKeyRecord, OwnershipProof, OwnershipProofError, PublicJwk};
+use crate::did::{DidKeyBlock, DidKeySubmission, OwnershipProofError};
 
 #[derive(Debug)]
 pub struct Blockchain {
@@ -17,22 +17,24 @@ impl Blockchain {
 
     pub fn add_public_key_block(
         &mut self,
-        did_key: impl Into<String>,
-        public_jwk: PublicJwk,
-        proof: OwnershipProof,
+        submissions: Vec<DidKeySubmission>,
     ) -> Result<(), OwnershipProofError> {
-        let record = DidKeyRecord::new(did_key, public_jwk);
+        let records = submissions
+            .into_iter()
+            .map(DidKeySubmission::into_verified_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        let block = DidKeyBlock::new(records)?;
 
-        record.verify_did_matches_public_key()?;
-        record.public_jwk.verify_ownership(&proof)?;
-        self.add_block(BlockData::PublicKey(record));
+        self.add_block(BlockData::PublicKeys(block));
         Ok(())
     }
 
-    pub fn public_key_blocks_match_dids(&self) -> bool {
+    pub fn public_key_blocks_have_supported_dids(&self) -> bool {
         self.chain.iter().all(|block| match &block.data {
             BlockData::Genesis => true,
-            BlockData::PublicKey(record) => record.verify_did_matches_public_key().is_ok(),
+            BlockData::PublicKeys(block) => {
+                block.verify_roles().is_ok() && block.verify_supported_did_keys().is_ok()
+            }
         })
     }
 
@@ -57,7 +59,7 @@ impl Blockchain {
             && genesis.previous_hash == "0".repeat(64)
             && genesis.hash == genesis.recalculate_hash()
             && genesis.proves_square(self.difficulty_bits)
-            && self.public_key_blocks_match_dids()
+            && self.public_key_blocks_have_supported_dids()
             && self
                 .chain
                 .windows(2)

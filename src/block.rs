@@ -1,4 +1,4 @@
-use crate::did::DidKeyRecord;
+use crate::did::DidKeyBlock;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -16,14 +16,14 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub enum BlockData {
     Genesis,
-    PublicKey(DidKeyRecord),
+    PublicKeys(DidKeyBlock),
 }
 
 impl BlockData {
     fn canonical_bytes(&self) -> Vec<u8> {
         match self {
             Self::Genesis => b"type=genesis".to_vec(),
-            Self::PublicKey(record) => record.canonical_bytes(),
+            Self::PublicKeys(records) => records.canonical_bytes(),
         }
     }
 }

@@ -5,6 +5,6 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.22"
+blst = "0.3"
 bs58 = "0.5"
-ed25519-dalek = "2"
 sha2 = "0.10"

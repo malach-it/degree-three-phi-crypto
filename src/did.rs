@@ -1,28 +1,42 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use blst::BLST_ERROR;
+use blst::min_pk::{PublicKey, Signature};
 use std::array::TryFromSliceError;
 use std::error::Error;
 use std::fmt;
 
-const ED25519_DID_KEY_PREFIX: [u8; 2] = [0xed, 0x01];
+const DID_KEY_PREFIX: &str = "did:key:z";
+const BLS12_381_G1_DID_KEY_PREFIX: [u8; 2] = [0xea, 0x01];
+const BLS12_381_G1_PUBLIC_KEY_LENGTH: usize = 48;
+const BLS12_381_G1_DID_KEY_LENGTH: usize =
+    BLS12_381_G1_DID_KEY_PREFIX.len() + BLS12_381_G1_PUBLIC_KEY_LENGTH;
+pub const BLS_SIGNATURE_DST: &[u8] = b"PHI_CRYPTO_BLS12_381_PROOF_V1";
+pub const DIDS_PER_BLOCK: usize = 3;
 
 #[derive(Debug, Clone)]
 pub struct DidKeyRecord {
     pub did_key: String,
-    pub public_jwk: PublicJwk,
+    pub role: DidRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DidRole {
+    Subject,
+    Witness,
+    Participant,
 }
 
 #[derive(Debug, Clone)]
-pub struct PublicJwk {
-    pub kty: String,
-    pub crv: Option<String>,
-    pub x: Option<String>,
-    pub y: Option<String>,
-    pub e: Option<String>,
-    pub n: Option<String>,
-    pub d: Option<String>,
-    pub k: Option<String>,
+pub struct DidKeyBlock {
+    pub records: Vec<DidKeyRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DidKeySubmission {
+    pub did_key: String,
+    pub role: DidRole,
+    pub proof: OwnershipProof,
 }
 
 #[derive(Debug, Clone)]
@@ -33,51 +47,49 @@ pub struct OwnershipProof {
 
 #[derive(Debug)]
 pub enum OwnershipProofError {
-    UnsupportedKeyType,
-    MissingPublicKey,
-    PrivateKeyMaterialPresent,
-    SymmetricKeyMaterialPresent,
-    InvalidPublicKeyEncoding(base64::DecodeError),
-    PublicKeyDoesNotMatchDid { expected: String, actual: String },
-    InvalidSignatureEncoding(base64::DecodeError),
+    WrongDidCount { expected: usize, actual: usize },
+    WrongSubjectCount { expected: usize, actual: usize },
+    WrongWitnessCount { expected: usize, actual: usize },
+    UnsupportedDidKey,
+    InvalidDidKeyEncoding(bs58::decode::Error),
+    InvalidDidKeyLength { expected: usize, actual: usize },
     InvalidPublicKeyLength(TryFromSliceError),
-    InvalidSignatureLength(ed25519_dalek::SignatureError),
-    InvalidPublicKey(ed25519_dalek::SignatureError),
-    InvalidSignature(ed25519_dalek::SignatureError),
+    InvalidSignatureEncoding(base64::DecodeError),
+    InvalidPublicKey(BLST_ERROR),
+    InvalidSignature(BLST_ERROR),
 }
 
 impl fmt::Display for OwnershipProofError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnsupportedKeyType => write!(f, "only Ed25519 public JWKs are supported"),
-            Self::MissingPublicKey => write!(f, "public JWK is missing the x coordinate"),
-            Self::PrivateKeyMaterialPresent => {
-                write!(f, "public JWK must not contain private key material")
+            Self::WrongDidCount { expected, actual } => {
+                write!(f, "expected {expected} DIDs in block, got {actual}")
             }
-            Self::SymmetricKeyMaterialPresent => {
-                write!(f, "public JWK must not contain symmetric key material")
+            Self::WrongSubjectCount { expected, actual } => {
+                write!(f, "expected {expected} subject DID in block, got {actual}")
             }
-            Self::InvalidPublicKeyEncoding(error) => {
-                write!(f, "public key is not valid base64url: {error}")
+            Self::WrongWitnessCount { expected, actual } => {
+                write!(f, "expected {expected} witness DID in block, got {actual}")
             }
-            Self::PublicKeyDoesNotMatchDid { expected, actual } => {
+            Self::UnsupportedDidKey => write!(f, "only did:key BLS12-381 G1 keys are supported"),
+            Self::InvalidDidKeyEncoding(error) => {
+                write!(f, "did:key is not valid base58btc: {error}")
+            }
+            Self::InvalidDidKeyLength { expected, actual } => {
                 write!(
                     f,
-                    "public JWK does not match DID: expected {expected}, got {actual}"
+                    "expected did:key payload length {expected}, got {actual}"
                 )
-            }
-            Self::InvalidSignatureEncoding(error) => {
-                write!(f, "signature is not valid base64url: {error}")
             }
             Self::InvalidPublicKeyLength(error) => {
                 write!(f, "public key has invalid length: {error}")
             }
-            Self::InvalidSignatureLength(error) => {
-                write!(f, "signature has invalid length: {error}")
+            Self::InvalidSignatureEncoding(error) => {
+                write!(f, "signature is not valid base64url: {error}")
             }
-            Self::InvalidPublicKey(error) => write!(f, "public key is invalid: {error}"),
+            Self::InvalidPublicKey(error) => write!(f, "public key is invalid: {error:?}"),
             Self::InvalidSignature(error) => {
-                write!(f, "signature does not match challenge: {error}")
+                write!(f, "signature does not match challenge: {error:?}")
             }
         }
     }
@@ -86,32 +98,122 @@ impl fmt::Display for OwnershipProofError {
 impl Error for OwnershipProofError {}
 
 impl DidKeyRecord {
-    pub fn new(did_key: impl Into<String>, public_jwk: PublicJwk) -> Self {
+    pub fn new(did_key: impl Into<String>, role: DidRole) -> Self {
         Self {
             did_key: did_key.into(),
-            public_jwk,
+            role,
         }
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
         format!(
-            "type=public-key;did_key={};jwk={}",
+            "type=did-key;did_key={};role={}",
             self.did_key,
-            self.public_jwk.canonical_string()
+            self.role.as_str()
         )
         .into_bytes()
     }
 
-    pub fn verify_did_matches_public_key(&self) -> Result<(), OwnershipProofError> {
-        let actual = self.public_jwk.to_did_key()?;
+    pub fn verify_supported_did_key(&self) -> Result<(), OwnershipProofError> {
+        bls12_381_public_key_from_did_key(&self.did_key).map(|_| ())
+    }
+}
 
-        if self.did_key == actual {
-            Ok(())
-        } else {
-            Err(OwnershipProofError::PublicKeyDoesNotMatchDid {
-                expected: self.did_key.clone(),
-                actual,
+impl DidKeyBlock {
+    pub fn new(records: Vec<DidKeyRecord>) -> Result<Self, OwnershipProofError> {
+        if records.len() != DIDS_PER_BLOCK {
+            return Err(OwnershipProofError::WrongDidCount {
+                expected: DIDS_PER_BLOCK,
+                actual: records.len(),
+            });
+        }
+
+        let block = Self { records };
+        block.verify_roles()?;
+        block.verify_supported_did_keys()?;
+        Ok(block)
+    }
+
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let records = self
+            .records
+            .iter()
+            .map(|record| {
+                String::from_utf8(record.canonical_bytes()).expect("canonical bytes are utf8")
             })
+            .collect::<Vec<_>>()
+            .join("|");
+
+        format!("type=did-key-block;records={records}").into_bytes()
+    }
+
+    pub fn verify_supported_did_keys(&self) -> Result<(), OwnershipProofError> {
+        if self.records.len() != DIDS_PER_BLOCK {
+            return Err(OwnershipProofError::WrongDidCount {
+                expected: DIDS_PER_BLOCK,
+                actual: self.records.len(),
+            });
+        }
+
+        for record in &self.records {
+            record.verify_supported_did_key()?;
+        }
+
+        Ok(())
+    }
+
+    pub fn verify_roles(&self) -> Result<(), OwnershipProofError> {
+        let subject_count = self
+            .records
+            .iter()
+            .filter(|record| record.role == DidRole::Subject)
+            .count();
+        let witness_count = self
+            .records
+            .iter()
+            .filter(|record| record.role == DidRole::Witness)
+            .count();
+
+        if subject_count != 1 {
+            return Err(OwnershipProofError::WrongSubjectCount {
+                expected: 1,
+                actual: subject_count,
+            });
+        }
+
+        if witness_count != 1 {
+            return Err(OwnershipProofError::WrongWitnessCount {
+                expected: 1,
+                actual: witness_count,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+impl DidKeySubmission {
+    pub fn with_role(did_key: impl Into<String>, role: DidRole, proof: OwnershipProof) -> Self {
+        Self {
+            did_key: did_key.into(),
+            role,
+            proof,
+        }
+    }
+
+    pub fn into_verified_record(self) -> Result<DidKeyRecord, OwnershipProofError> {
+        verify_did_key_ownership(&self.did_key, &self.proof)?;
+
+        Ok(DidKeyRecord::new(self.did_key, self.role))
+    }
+}
+
+impl DidRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Subject => "subject",
+            Self::Witness => "witness",
+            Self::Participant => "participant",
         }
     }
 }
@@ -125,98 +227,65 @@ impl OwnershipProof {
     }
 }
 
-impl PublicJwk {
-    pub fn ed25519_public(x: impl Into<String>) -> Self {
-        Self {
-            kty: "OKP".to_string(),
-            crv: Some("Ed25519".to_string()),
-            x: Some(x.into()),
-            y: None,
-            e: None,
-            n: None,
-            d: None,
-            k: None,
-        }
+pub fn did_key_from_bls12_381_public_key(public_key: &[u8; 48]) -> String {
+    let mut prefixed_key = Vec::with_capacity(BLS12_381_G1_DID_KEY_LENGTH);
+
+    prefixed_key.extend_from_slice(&BLS12_381_G1_DID_KEY_PREFIX);
+    prefixed_key.extend_from_slice(public_key);
+
+    format!("did:key:z{}", bs58::encode(prefixed_key).into_string())
+}
+
+pub fn bls12_381_public_key_from_did_key(did_key: &str) -> Result<[u8; 48], OwnershipProofError> {
+    let encoded = did_key
+        .strip_prefix(DID_KEY_PREFIX)
+        .ok_or(OwnershipProofError::UnsupportedDidKey)?;
+    let payload = bs58::decode(encoded)
+        .into_vec()
+        .map_err(OwnershipProofError::InvalidDidKeyEncoding)?;
+
+    if payload.len() != BLS12_381_G1_DID_KEY_LENGTH {
+        return Err(OwnershipProofError::InvalidDidKeyLength {
+            expected: BLS12_381_G1_DID_KEY_LENGTH,
+            actual: payload.len(),
+        });
     }
 
-    pub fn canonical_string(&self) -> String {
-        format!(
-            "crv={};d={};e={};k={};kty={};n={};x={};y={}",
-            self.crv.as_deref().unwrap_or(""),
-            self.d.as_deref().unwrap_or(""),
-            self.e.as_deref().unwrap_or(""),
-            self.k.as_deref().unwrap_or(""),
-            self.kty,
-            self.n.as_deref().unwrap_or(""),
-            self.x.as_deref().unwrap_or(""),
-            self.y.as_deref().unwrap_or("")
-        )
+    if payload[..BLS12_381_G1_DID_KEY_PREFIX.len()] != BLS12_381_G1_DID_KEY_PREFIX {
+        return Err(OwnershipProofError::UnsupportedDidKey);
     }
 
-    pub fn to_did_key(&self) -> Result<String, OwnershipProofError> {
-        let public_key_bytes = self.ed25519_public_key_bytes()?;
-        let mut prefixed_key =
-            Vec::with_capacity(ED25519_DID_KEY_PREFIX.len() + public_key_bytes.len());
+    payload[BLS12_381_G1_DID_KEY_PREFIX.len()..]
+        .try_into()
+        .map_err(OwnershipProofError::InvalidPublicKeyLength)
+}
 
-        prefixed_key.extend_from_slice(&ED25519_DID_KEY_PREFIX);
-        prefixed_key.extend_from_slice(&public_key_bytes);
+pub fn verify_did_key_ownership(
+    did_key: &str,
+    proof: &OwnershipProof,
+) -> Result<(), OwnershipProofError> {
+    let public_key_bytes = bls12_381_public_key_from_did_key(did_key)?;
+    let public_key =
+        PublicKey::uncompress(&public_key_bytes).map_err(OwnershipProofError::InvalidPublicKey)?;
 
-        Ok(format!(
-            "did:key:z{}",
-            bs58::encode(prefixed_key).into_string()
-        ))
-    }
+    let signature_bytes = URL_SAFE_NO_PAD
+        .decode(&proof.signature)
+        .map_err(OwnershipProofError::InvalidSignatureEncoding)?;
+    let signature =
+        Signature::uncompress(&signature_bytes).map_err(OwnershipProofError::InvalidSignature)?;
 
-    pub fn verify_ownership(&self, proof: &OwnershipProof) -> Result<(), OwnershipProofError> {
-        let public_key_bytes = self.ed25519_public_key_bytes()?;
-        let verifying_key = VerifyingKey::from_bytes(&public_key_bytes)
-            .map_err(OwnershipProofError::InvalidPublicKey)?;
+    let result = signature.verify(
+        true,
+        proof.challenge.as_bytes(),
+        BLS_SIGNATURE_DST,
+        &[],
+        &public_key,
+        true,
+    );
 
-        let signature_bytes = URL_SAFE_NO_PAD
-            .decode(&proof.signature)
-            .map_err(OwnershipProofError::InvalidSignatureEncoding)?;
-        let signature = Signature::from_slice(&signature_bytes)
-            .map_err(OwnershipProofError::InvalidSignatureLength)?;
-
-        verifying_key
-            .verify(proof.challenge.as_bytes(), &signature)
-            .map_err(OwnershipProofError::InvalidSignature)
-    }
-
-    fn ed25519_public_key_bytes(&self) -> Result<[u8; 32], OwnershipProofError> {
-        self.ensure_asymmetric_public_key()?;
-
-        let public_key = self
-            .x
-            .as_ref()
-            .ok_or(OwnershipProofError::MissingPublicKey)?;
-        let public_key_bytes = URL_SAFE_NO_PAD
-            .decode(public_key)
-            .map_err(OwnershipProofError::InvalidPublicKeyEncoding)?;
-
-        public_key_bytes
-            .as_slice()
-            .try_into()
-            .map_err(OwnershipProofError::InvalidPublicKeyLength)
-    }
-
-    pub fn ensure_asymmetric_public_key(&self) -> Result<(), OwnershipProofError> {
-        if self.k.is_some() || self.kty == "oct" {
-            return Err(OwnershipProofError::SymmetricKeyMaterialPresent);
-        }
-
-        if self.d.is_some() {
-            return Err(OwnershipProofError::PrivateKeyMaterialPresent);
-        }
-
-        if self.kty != "OKP" || self.crv.as_deref() != Some("Ed25519") {
-            return Err(OwnershipProofError::UnsupportedKeyType);
-        }
-
-        if self.x.is_none() {
-            return Err(OwnershipProofError::MissingPublicKey);
-        }
-
+    if result == BLST_ERROR::BLST_SUCCESS {
         Ok(())
+    } else {
+        Err(OwnershipProofError::InvalidSignature(result))
     }
 }
