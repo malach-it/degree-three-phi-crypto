@@ -1,4 +1,4 @@
-# three-degree-phi-crypto
+# degree-three-phi-crypto
 
 A small Rust blockchain experiment using BLS12-381 `did:key` identifiers.
 
@@ -11,7 +11,7 @@ role:
 - participant
 
 Each public-key block is now a receipt: it stores only the accepted
-`three_degree_phi_token` and the authority signature over that token. The
+`degree_three_phi_token` and the authority signature over that token. The
 amount, role records, role tokens, and party signatures are verified when the
 block is created, but they are not persisted in the block.
 
@@ -47,25 +47,25 @@ witness_signature = sign(witness_key, amount_token_witness), when present
 participant_signature = sign(participant_key, amount_token_participant)
 ```
 
-The submitted `three_degree_phi_token` is the aggregate of those signatures:
+The submitted `degree_three_phi_token` is the aggregate of those signatures:
 
 ```text
-three_degree_phi_token =
+degree_three_phi_token =
   subject_signature + optional(witness_signature) + participant_signature
 ```
 
 During block creation, the block verifies the submitted aggregate and the
-authority signs the accepted three degree phi token:
+authority signs the accepted degree three phi token:
 
 ```text
-three_degree_phi_token_authority_signature =
-  sign(authority_key, "authorize three-degree-phi-crypto three degree phi token {three_degree_phi_token}")
+degree_three_phi_token_authority_signature =
+  sign(authority_key, "authorize degree-three-phi-crypto degree three phi token {degree_three_phi_token}")
 ```
 
 At block creation, the chain recomputes the role amount tokens, checks that
 each party signed the correct role token, checks that the submitted
-`three_degree_phi_token` matches the aggregate signatures, and verifies the authority
-signature over the resulting `three_degree_phi_token`.
+`degree_three_phi_token` matches the aggregate signatures, and verifies the authority
+signature over the resulting `degree_three_phi_token`.
 
 Later chain validation can verify the persisted receipt and block hash, but it
 cannot replay the full three-party transaction proof from the block alone
@@ -73,7 +73,7 @@ because the block no longer stores the amount or DID records.
 
 ## Three-Party Block Verification
 
-![Three Degree Phi coin](images/three-degree-phi-coin.png)
+![Degree Three Phi coin](images/degree-three-phi-coin.png)
 
 The three parties can still verify a block together if they retain or exchange
 the transaction witness data used at creation time:
@@ -91,12 +91,12 @@ Given that witness data and the stored block receipt, they verify:
 ```text
 role amount tokens recompute from amount and DID records
 each party signature verifies its role amount token
-subject_signature + witness_signature + participant_signature == three_degree_phi_token
-three_degree_phi_token_authority_signature verifies authority approval of three_degree_phi_token
+subject_signature + witness_signature + participant_signature == degree_three_phi_token
+degree_three_phi_token_authority_signature verifies authority approval of degree_three_phi_token
 ```
 
 Without that external witness data, the stored block proves only that the
-authority approved the aggregate `three_degree_phi_token`; it does not reveal or
+authority approved the aggregate `degree_three_phi_token`; it does not reveal or
 reconstruct the three parties, their roles, or the amount.
 
 ## Amount Token Duplication Caveat
@@ -128,11 +128,11 @@ participant_signature verifies participant_did over amount_token_participant
 
 The subject signature binds the duplicated subject amount token to the claimed
 subject DID. The witness and participant signatures bind their own role-specific
-amount tokens to their DIDs. The aggregate `three_degree_phi_token` is then
+amount tokens to their DIDs. The aggregate `degree_three_phi_token` is then
 checked as:
 
 ```text
-subject_signature + witness_signature + participant_signature == three_degree_phi_token
+subject_signature + witness_signature + participant_signature == degree_three_phi_token
 ```
 
 It should be treated as a compact receipt for those verified signatures, not as
@@ -145,20 +145,20 @@ No.
 Two parties cannot derive the third party DID from only:
 
 ```text
-three_degree_phi_token
-three_degree_phi_token_authority_signature
+degree_three_phi_token
+degree_three_phi_token_authority_signature
 their own amount tokens
 their own signatures
 ```
 
-The reason is that `three_degree_phi_token` is an aggregate of BLS signatures, not an
+The reason is that `degree_three_phi_token` is an aggregate of BLS signatures, not an
 aggregate of public DID keys. Removing two known signatures from the aggregate
 can reveal the remaining signature value, but a BLS signature does not reveal
 the signer's public key. Recovering the public key from that signature would be
 equivalent to breaking the underlying elliptic-curve discrete-log assumption.
 
 The authority signature does not change that. It attests that the authority saw
-and accepted the aggregate three degree phi token, but it does not make the aggregate
+and accepted the aggregate degree three phi token, but it does not make the aggregate
 reversible into the hidden party's DID.
 
 What two parties can do is verify a candidate DID if someone presents one. Given
@@ -175,13 +175,13 @@ the public block result:
 
 ```text
 candidate_signature verifies candidate_did over candidate_role_amount_token
-candidate_signature + known_signature_1 + known_signature_2 == three_degree_phi_token
-three_degree_phi_token_authority_signature verifies authority approval of three_degree_phi_token
+candidate_signature + known_signature_1 + known_signature_2 == degree_three_phi_token
+degree_three_phi_token_authority_signature verifies authority approval of degree_three_phi_token
 ```
 
 In other words, the candidate DID is accepted only if its signature verifies the
 candidate role amount token and the three signatures aggregate back to the
-block's `three_degree_phi_token`.
+block's `degree_three_phi_token`.
 
 This means the protocol can prove participation by known DIDs, but it is not a
 DID discovery mechanism.
@@ -309,7 +309,7 @@ subject -> optional(witness) -> participant -> block creation
 ```
 
 After the participant signs, the API aggregates the submissions into
-`three_degree_phi_token`, adds a block to the in-memory blockchain, and returns
+`degree_three_phi_token`, adds a block to the in-memory blockchain, and returns
 an HTML block creation receipt.
 
 ## License

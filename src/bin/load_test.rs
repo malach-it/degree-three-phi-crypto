@@ -10,8 +10,8 @@ use blockchain::Blockchain;
 use blst::min_pk::SecretKey;
 use did::{
     BLS_SIGNATURE_DST, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
-    amount_token_group_for_block, amount_tokens_for_records, did_key_from_bls12_381_public_key,
-    three_degree_phi_token_for_records, verify_did_key_ownership,
+    amount_token_group_for_block, amount_tokens_for_records, degree_three_phi_token_for_records,
+    did_key_from_bls12_381_public_key, verify_did_key_ownership,
 };
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -154,13 +154,13 @@ fn run_worker(
             amount_tokens_for_records(&records, exchange.amount, &amount_token_group)
                 .expect("load-test amount tokens should compute");
         let submissions = exchange_submissions(&exchange, &amount_tokens);
-        let three_degree_phi_token = three_degree_phi_token_for_submissions(&submissions);
+        let degree_three_phi_token = degree_three_phi_token_for_submissions(&submissions);
         let proof_records = records_for_submissions(&submissions);
 
         match blockchain.add_public_key_block(
             submissions,
             exchange.amount,
-            three_degree_phi_token.clone(),
+            degree_three_phi_token.clone(),
         ) {
             Ok(()) => {
                 stats.accepted += 1;
@@ -173,18 +173,18 @@ fn run_worker(
                     block,
                     &proof_records,
                     &amount_tokens,
-                    &three_degree_phi_token,
+                    &degree_three_phi_token,
                 );
                 stats.third_party_checks += check_stats.total;
                 stats.third_party_check_failures += check_stats.failed;
 
                 if print_blocks {
-                    print_created_block(block, &exchange, &three_degree_phi_token);
+                    print_created_block(block, &exchange, &degree_three_phi_token);
                     print_two_party_third_check_results(
                         block,
                         &proof_records,
                         &amount_tokens,
-                        &three_degree_phi_token,
+                        &degree_three_phi_token,
                     );
                     println!("\n\n");
                 }
@@ -209,7 +209,7 @@ fn verify_two_party_third_checks(
     block: &block::Block,
     records: &[DidKeyRecord],
     amount_tokens: &did::AmountTokens,
-    three_degree_phi_token: &str,
+    degree_three_phi_token: &str,
 ) -> ThirdPartyCheckStats {
     let BlockData::PublicKeys(_) = &block.data else {
         return ThirdPartyCheckStats {
@@ -228,7 +228,7 @@ fn verify_two_party_third_checks(
         if !two_party_third_check_passes(
             records,
             amount_tokens,
-            three_degree_phi_token,
+            degree_three_phi_token,
             target_role,
         ) {
             stats.failed += 1;
@@ -247,7 +247,7 @@ fn print_two_party_third_check_results(
     block: &block::Block,
     records: &[DidKeyRecord],
     amount_tokens: &did::AmountTokens,
-    three_degree_phi_token: &str,
+    degree_three_phi_token: &str,
 ) {
     let BlockData::PublicKeys(_) = &block.data else {
         return;
@@ -257,7 +257,7 @@ fn print_two_party_third_check_results(
         let result = two_party_third_check_result(
             records,
             amount_tokens,
-            three_degree_phi_token,
+            degree_three_phi_token,
             target_role,
         );
 
@@ -277,10 +277,10 @@ fn print_two_party_third_check_results(
 fn two_party_third_check_passes(
     records: &[DidKeyRecord],
     amount_tokens: &did::AmountTokens,
-    three_degree_phi_token: &str,
+    degree_three_phi_token: &str,
     target_role: DidRole,
 ) -> bool {
-    two_party_third_check_result(records, amount_tokens, three_degree_phi_token, target_role)
+    two_party_third_check_result(records, amount_tokens, degree_three_phi_token, target_role)
         .passed()
 }
 
@@ -308,7 +308,7 @@ impl ThirdPartyCheckResult {
 fn two_party_third_check_result(
     records: &[DidKeyRecord],
     amount_tokens: &did::AmountTokens,
-    three_degree_phi_token: &str,
+    degree_three_phi_token: &str,
     target_role: DidRole,
 ) -> ThirdPartyCheckResult {
     let Some(target_record) = record_for_role(records, target_role) else {
@@ -318,8 +318,8 @@ fn two_party_third_check_result(
         target_record.proof.challenge == amount_token_for_role(amount_tokens, target_role);
     let target_signature_valid =
         verify_did_key_ownership(&target_record.did_key, &target_record.proof).is_ok();
-    let block_result_matches = three_degree_phi_token_for_records(records)
-        .map(|actual| actual == three_degree_phi_token)
+    let block_result_matches = degree_three_phi_token_for_records(records)
+        .map(|actual| actual == degree_three_phi_token)
         .unwrap_or(false);
 
     ThirdPartyCheckResult {
@@ -332,21 +332,21 @@ fn two_party_third_check_result(
 fn print_created_block(
     block: &block::Block,
     exchange: &Exchange<'_>,
-    three_degree_phi_token: &str,
+    degree_three_phi_token: &str,
 ) {
     let BlockData::PublicKeys(_) = &block.data else {
         return;
     };
 
     println!(
-        "load_test block_created index {}\n hash {}\n amount {}\n subject {}\n witness {}\n participant {}\n three_degree_phi_token {}\n",
+        "load_test block_created index {}\n hash {}\n amount {}\n subject {}\n witness {}\n participant {}\n degree_three_phi_token {}\n",
         block.index,
         block.hash,
         exchange.amount,
         exchange.subject.did_key,
         exchange.witness.did_key,
         exchange.participant.did_key,
-        three_degree_phi_token
+        degree_three_phi_token
     );
 }
 
@@ -469,10 +469,10 @@ fn exchange_records_without_proofs(exchange: &Exchange<'_>) -> Vec<DidKeyRecord>
     .collect()
 }
 
-fn three_degree_phi_token_for_submissions(submissions: &[DidKeySubmission]) -> String {
+fn degree_three_phi_token_for_submissions(submissions: &[DidKeySubmission]) -> String {
     let records = records_for_submissions(submissions);
 
-    three_degree_phi_token_for_records(&records).expect("load-test signatures should aggregate")
+    degree_three_phi_token_for_records(&records).expect("load-test signatures should aggregate")
 }
 
 fn records_for_submissions(submissions: &[DidKeySubmission]) -> Vec<DidKeyRecord> {

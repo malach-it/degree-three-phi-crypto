@@ -30,7 +30,7 @@ impl Blockchain {
         &mut self,
         submissions: Vec<DidKeySubmission>,
         amount: u8,
-        three_degree_phi_token: String,
+        degree_three_phi_token: String,
     ) -> Result<(), OwnershipProofError> {
         let records = submissions
             .into_iter()
@@ -53,7 +53,7 @@ impl Blockchain {
         let block = DidKeyBlock::new(
             records,
             amount,
-            three_degree_phi_token,
+            degree_three_phi_token,
             &self.amount_authority_key,
             previous_state.participant_did_key.as_deref(),
             previous_state.amount,

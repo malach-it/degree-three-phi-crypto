@@ -7,8 +7,8 @@ use blockchain::Blockchain;
 use blst::min_pk::SecretKey;
 use did::{
     AmountTokens, BLS_SIGNATURE_DST, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
-    amount_token_group_for_block, amount_tokens_for_records, did_key_from_bls12_381_public_key,
-    three_degree_phi_token_for_records, verify_did_key_ownership,
+    amount_token_group_for_block, amount_tokens_for_records, degree_three_phi_token_for_records,
+    did_key_from_bls12_381_public_key, verify_did_key_ownership,
 };
 
 const DEFAULT_DIFFICULTY_BITS: u8 = 16;
@@ -20,7 +20,7 @@ struct DemoReceipt {
     amount: u8,
     records: Vec<DidKeyRecord>,
     amount_tokens: AmountTokens,
-    three_degree_phi_token: String,
+    degree_three_phi_token: String,
 }
 
 fn main() {
@@ -93,10 +93,10 @@ fn add_demo_public_key_block(
             )
         })
         .collect::<Vec<_>>();
-    let three_degree_phi_token = three_degree_phi_token_for_submissions(&submissions);
+    let degree_three_phi_token = degree_three_phi_token_for_submissions(&submissions);
 
     blockchain
-        .add_public_key_block(submissions, amount, three_degree_phi_token.clone())
+        .add_public_key_block(submissions, amount, degree_three_phi_token.clone())
         .expect("public key ownership proofs should verify at block creation");
     let block = blockchain
         .chain
@@ -109,7 +109,7 @@ fn add_demo_public_key_block(
         amount,
         records: records_with_proofs(&signing_keys, &amount_tokens),
         amount_tokens,
-        three_degree_phi_token,
+        degree_three_phi_token,
     }
 }
 
@@ -121,12 +121,12 @@ fn print_chain(blockchain: &Blockchain) {
                 block.index, block.nonce, block.proof_square, block.hash
             ),
             BlockData::PublicKeys(did_block) => println!(
-                "block #{}, type amount-proof-receipt, nonce {}, square-proof {}, hash {}, three_degree_phi_token {}",
+                "block #{}, type amount-proof-receipt, nonce {}, square-proof {}, hash {}, degree_three_phi_token {}",
                 block.index,
                 block.nonce,
                 block.proof_square,
                 block.hash,
-                did_block.three_degree_phi_token
+                did_block.degree_three_phi_token
             ),
         }
     }
@@ -134,8 +134,8 @@ fn print_chain(blockchain: &Blockchain) {
 
 fn print_receipt(receipt: &DemoReceipt, amount_authority_did_key: &str) {
     println!(
-        "receipt block #{}, hash {}, amount {}, three_degree_phi_token {}",
-        receipt.block_index, receipt.block_hash, receipt.amount, receipt.three_degree_phi_token
+        "receipt block #{}, hash {}, amount {}, degree_three_phi_token {}",
+        receipt.block_index, receipt.block_hash, receipt.amount, receipt.degree_three_phi_token
     );
     println!("  amount_token_subject {}", receipt.amount_tokens.subject);
     println!("  amount_token_witness {}", receipt.amount_tokens.witness);
@@ -144,7 +144,7 @@ fn print_receipt(receipt: &DemoReceipt, amount_authority_did_key: &str) {
         receipt.amount_tokens.participant
     );
     println!("  operation amount_token_group is derived before block creation");
-    println!("  operation authority signs three_degree_phi_token");
+    println!("  operation authority signs degree_three_phi_token");
     println!("  operation authority_key = {amount_authority_did_key}");
 
     for record in &receipt.records {
@@ -160,14 +160,14 @@ fn print_receipt(receipt: &DemoReceipt, amount_authority_did_key: &str) {
     print_two_party_block_result_verifications(
         &receipt.records,
         &receipt.amount_tokens,
-        &receipt.three_degree_phi_token,
+        &receipt.degree_three_phi_token,
     );
 }
 
 fn print_two_party_block_result_verifications(
     records: &[DidKeyRecord],
     amount_tokens: &AmountTokens,
-    three_degree_phi_token: &str,
+    degree_three_phi_token: &str,
 ) {
     for target_role in [DidRole::Subject, DidRole::Witness, DidRole::Participant] {
         let verifier_roles = [DidRole::Subject, DidRole::Witness, DidRole::Participant]
@@ -181,8 +181,8 @@ fn print_two_party_block_result_verifications(
         let challenge_matches_block = target_record.proof.challenge == expected_challenge;
         let target_signature_valid =
             verify_did_key_ownership(&target_record.did_key, &target_record.proof).is_ok();
-        let block_result_matches = three_degree_phi_token_for_records(records)
-            .map(|actual| actual == three_degree_phi_token)
+        let block_result_matches = degree_three_phi_token_for_records(records)
+            .map(|actual| actual == degree_three_phi_token)
             .unwrap_or(false);
 
         println!(
@@ -271,7 +271,7 @@ fn did_key_for_secret_key(signing_key: &SecretKey) -> String {
     did_key_from_bls12_381_public_key(&signing_key.sk_to_pk().compress())
 }
 
-fn three_degree_phi_token_for_submissions(submissions: &[DidKeySubmission]) -> String {
+fn degree_three_phi_token_for_submissions(submissions: &[DidKeySubmission]) -> String {
     let records = submissions
         .iter()
         .map(|submission| {
@@ -283,7 +283,7 @@ fn three_degree_phi_token_for_submissions(submissions: &[DidKeySubmission]) -> S
         })
         .collect::<Vec<_>>();
 
-    three_degree_phi_token_for_records(&records).expect("signatures should aggregate")
+    degree_three_phi_token_for_records(&records).expect("signatures should aggregate")
 }
 
 fn bls_secret_key(seed: u8) -> SecretKey {
@@ -332,12 +332,12 @@ mod tests {
             panic!("expected public key block");
         };
 
-        assert_eq!(block.three_degree_phi_token, receipt.three_degree_phi_token);
+        assert_eq!(block.degree_three_phi_token, receipt.degree_three_phi_token);
         assert!(blockchain.is_valid());
     }
 
     #[test]
-    fn rejects_wrong_three_degree_phi_token_at_creation() {
+    fn rejects_wrong_degree_three_phi_token_at_creation() {
         let authority_key = bls_secret_key(42);
         let authority_did = did_key_for_secret_key(&authority_key);
         let mut blockchain = Blockchain::new(12, authority_key);
@@ -403,9 +403,9 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let three_degree_phi_token = three_degree_phi_token_for_submissions(&submissions);
+        let degree_three_phi_token = degree_three_phi_token_for_submissions(&submissions);
 
-        let result = blockchain.add_public_key_block(submissions, 8, three_degree_phi_token);
+        let result = blockchain.add_public_key_block(submissions, 8, degree_three_phi_token);
 
         assert!(matches!(
             result,
@@ -434,7 +434,7 @@ mod tests {
         let BlockData::PublicKeys(block) = &mut blockchain.chain[1].data else {
             panic!("expected public key block");
         };
-        block.three_degree_phi_token_authority_proof.signature = "bad".to_string();
+        block.degree_three_phi_token_authority_proof.signature = "bad".to_string();
         blockchain.chain[1].hash = blockchain.chain[1].recalculate_hash();
 
         assert!(!blockchain.is_valid());
@@ -473,10 +473,10 @@ mod tests {
                 &amount_tokens.participant,
             ),
         ];
-        let three_degree_phi_token = three_degree_phi_token_for_submissions(&submissions);
+        let degree_three_phi_token = degree_three_phi_token_for_submissions(&submissions);
 
         blockchain
-            .add_public_key_block(submissions, 7, three_degree_phi_token)
+            .add_public_key_block(submissions, 7, degree_three_phi_token)
             .expect("witness should be optional");
 
         assert_eq!(blockchain.chain.len(), 2);
@@ -513,12 +513,12 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let three_degree_phi_token = three_degree_phi_token_for_records(&records).unwrap();
+        let degree_three_phi_token = degree_three_phi_token_for_records(&records).unwrap();
 
         let block = DidKeyBlock::new(
             records,
             7,
-            three_degree_phi_token,
+            degree_three_phi_token,
             &bls_secret_key(42),
             None,
             None,
@@ -526,6 +526,6 @@ mod tests {
         )
         .expect("creation-time records should verify");
 
-        assert!(!block.three_degree_phi_token.is_empty());
+        assert!(!block.degree_three_phi_token.is_empty());
     }
 }

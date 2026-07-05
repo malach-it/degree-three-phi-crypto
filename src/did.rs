@@ -32,8 +32,8 @@ pub enum DidRole {
 
 #[derive(Debug, Clone)]
 pub struct DidKeyBlock {
-    pub three_degree_phi_token: String,
-    pub three_degree_phi_token_authority_proof: OwnershipProof,
+    pub degree_three_phi_token: String,
+    pub degree_three_phi_token_authority_proof: OwnershipProof,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,7 +127,7 @@ impl fmt::Display for OwnershipProofError {
             Self::ThreeDegreePhiTokenDoesNotMatch { expected, actual } => {
                 write!(
                     f,
-                    "three degree phi token mismatch: expected {expected}, got {actual}"
+                    "degree three phi token mismatch: expected {expected}, got {actual}"
                 )
             }
             Self::AmountProofChallengeDoesNotMatch { expected, actual } => {
@@ -139,7 +139,7 @@ impl fmt::Display for OwnershipProofError {
             Self::ThreeDegreePhiTokenAuthorityChallengeDoesNotMatch { expected, actual } => {
                 write!(
                     f,
-                    "three degree phi token authority challenge mismatch: expected {expected}, got {actual}"
+                    "degree three phi token authority challenge mismatch: expected {expected}, got {actual}"
                 )
             }
             Self::InvalidSignature(error) => {
@@ -173,7 +173,7 @@ impl DidKeyBlock {
     pub fn new(
         records: Vec<DidKeyRecord>,
         amount: u8,
-        three_degree_phi_token: String,
+        degree_three_phi_token: String,
         authority_signing_key: &SecretKey,
         previous_participant_did_key: Option<&str>,
         previous_participant_amount: Option<u8>,
@@ -198,45 +198,45 @@ impl DidKeyBlock {
             previous_participant_amount_token,
         )?;
         let amount_tokens = amount_tokens_for_records(&records, amount, &amount_token_group)?;
-        let three_degree_phi_token_authority_proof = sign_three_degree_phi_token_authority_proof(
+        let degree_three_phi_token_authority_proof = sign_degree_three_phi_token_authority_proof(
             authority_signing_key,
-            &three_degree_phi_token,
+            &degree_three_phi_token,
         );
         verify_roles_for_records(&records)?;
         verify_supported_did_keys_for_records(&records)?;
-        verify_three_degree_phi_token_for_records(&records, &three_degree_phi_token)?;
+        verify_degree_three_phi_token_for_records(&records, &degree_three_phi_token)?;
         verify_amount_proof_challenges_for_records(&records, &amount_tokens)?;
         verify_ownership_proofs_for_records(&records)?;
         let block = Self {
-            three_degree_phi_token,
-            three_degree_phi_token_authority_proof,
+            degree_three_phi_token,
+            degree_three_phi_token_authority_proof,
         };
-        block.verify_three_degree_phi_token_authority_proof(&authority_did_key)?;
+        block.verify_degree_three_phi_token_authority_proof(&authority_did_key)?;
         Ok(block)
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
         format!(
-            "type=did-key-block;three_degree_phi_token={};three_degree_phi_token_authority_challenge={};three_degree_phi_token_authority_signature={}",
-            self.three_degree_phi_token,
-            self.three_degree_phi_token_authority_proof.challenge,
-            self.three_degree_phi_token_authority_proof.signature
+            "type=did-key-block;degree_three_phi_token={};degree_three_phi_token_authority_challenge={};degree_three_phi_token_authority_signature={}",
+            self.degree_three_phi_token,
+            self.degree_three_phi_token_authority_proof.challenge,
+            self.degree_three_phi_token_authority_proof.signature
         )
         .into_bytes()
     }
 
-    pub fn verify_three_degree_phi_token_authority_proof(
+    pub fn verify_degree_three_phi_token_authority_proof(
         &self,
         authority_did_key: &str,
     ) -> Result<(), OwnershipProofError> {
-        let expected = three_degree_phi_token_authority_challenge(&self.three_degree_phi_token);
+        let expected = degree_three_phi_token_authority_challenge(&self.degree_three_phi_token);
 
-        if self.three_degree_phi_token_authority_proof.challenge != expected {
+        if self.degree_three_phi_token_authority_proof.challenge != expected {
             return Err(
                 OwnershipProofError::ThreeDegreePhiTokenAuthorityChallengeDoesNotMatch {
                     expected,
                     actual: self
-                        .three_degree_phi_token_authority_proof
+                        .degree_three_phi_token_authority_proof
                         .challenge
                         .clone(),
                 },
@@ -245,12 +245,12 @@ impl DidKeyBlock {
 
         verify_did_key_ownership(
             authority_did_key,
-            &self.three_degree_phi_token_authority_proof,
+            &self.degree_three_phi_token_authority_proof,
         )
     }
 
     pub fn verify_mining_proof(&self, authority_did_key: &str) -> Result<(), OwnershipProofError> {
-        self.verify_three_degree_phi_token_authority_proof(authority_did_key)
+        self.verify_degree_three_phi_token_authority_proof(authority_did_key)
     }
 }
 
@@ -326,17 +326,17 @@ fn verify_ownership_proofs_for_records(
     Ok(())
 }
 
-fn verify_three_degree_phi_token_for_records(
+fn verify_degree_three_phi_token_for_records(
     records: &[DidKeyRecord],
-    three_degree_phi_token: &str,
+    degree_three_phi_token: &str,
 ) -> Result<(), OwnershipProofError> {
-    let actual = three_degree_phi_token_for_records(records)?;
+    let actual = degree_three_phi_token_for_records(records)?;
 
-    if three_degree_phi_token == actual {
+    if degree_three_phi_token == actual {
         Ok(())
     } else {
         Err(OwnershipProofError::ThreeDegreePhiTokenDoesNotMatch {
-            expected: three_degree_phi_token.to_string(),
+            expected: degree_three_phi_token.to_string(),
             actual,
         })
     }
@@ -495,7 +495,7 @@ pub fn amount_tokens_for_records(
     })
 }
 
-pub fn three_degree_phi_token_for_records(
+pub fn degree_three_phi_token_for_records(
     records: &[DidKeyRecord],
 ) -> Result<String, OwnershipProofError> {
     let signatures = records
@@ -541,15 +541,15 @@ fn valid_did_count(count: usize) -> bool {
     (MIN_DIDS_PER_BLOCK..=MAX_DIDS_PER_BLOCK).contains(&count)
 }
 
-pub fn three_degree_phi_token_authority_challenge(three_degree_phi_token: &str) -> String {
-    format!("authorize three-degree-phi-crypto three degree phi token {three_degree_phi_token}")
+pub fn degree_three_phi_token_authority_challenge(degree_three_phi_token: &str) -> String {
+    format!("authorize degree-three-phi-crypto degree three phi token {degree_three_phi_token}")
 }
 
-fn sign_three_degree_phi_token_authority_proof(
+fn sign_degree_three_phi_token_authority_proof(
     signing_key: &SecretKey,
-    three_degree_phi_token: &str,
+    degree_three_phi_token: &str,
 ) -> OwnershipProof {
-    let challenge = three_degree_phi_token_authority_challenge(three_degree_phi_token);
+    let challenge = degree_three_phi_token_authority_challenge(degree_three_phi_token);
     let signature = signing_key.sign(challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
 
     OwnershipProof::new(challenge, base64url(&signature.compress()))

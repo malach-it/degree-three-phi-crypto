@@ -13,7 +13,7 @@ use blst::min_pk::SecretKey;
 use did::{
     BLS_SIGNATURE_DST, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
     amount_token_for_did_key, amount_token_group_for_block, amount_tokens_for_records,
-    did_key_from_bls12_381_public_key, three_degree_phi_token_for_records,
+    degree_three_phi_token_for_records, did_key_from_bls12_381_public_key,
     verify_did_key_ownership,
 };
 use std::collections::HashMap;
@@ -75,7 +75,7 @@ fn handle_connection(stream: &mut TcpStream, state: &ApiState) -> Result<(), Api
             stream,
             "200 OK",
             "text/plain",
-            "three-degree-phi-crypto amount token API\n",
+            "degree-three-phi-crypto amount token API\n",
         )?,
         ("GET", "/blockchain") => {
             let body = blockchain_status(state);
@@ -300,7 +300,7 @@ struct BlockCreationResult {
     block_index: u64,
     block_hash: String,
     mount_token: String,
-    three_degree_phi_token: String,
+    degree_three_phi_token: String,
     chain_blocks: usize,
     chain_valid: bool,
 }
@@ -320,7 +320,7 @@ fn create_flow_block(
             )
         })
         .collect::<Vec<_>>();
-    let three_degree_phi_token = three_degree_phi_token_for_records(&records).map_err(|error| {
+    let degree_three_phi_token = degree_three_phi_token_for_records(&records).map_err(|error| {
         ApiError::bad_request(format!("could not aggregate submissions: {error}"))
     })?;
     let mut blockchain = state
@@ -329,7 +329,7 @@ fn create_flow_block(
         .expect("blockchain mutex should not be poisoned");
 
     blockchain
-        .add_public_key_block(submissions, amount, three_degree_phi_token.clone())
+        .add_public_key_block(submissions, amount, degree_three_phi_token.clone())
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let block = blockchain
         .chain
@@ -343,7 +343,7 @@ fn create_flow_block(
             .current_participant_amount_token()
             .expect("accepted block should register a participant amount token")
             .to_string(),
-        three_degree_phi_token,
+        degree_three_phi_token,
         chain_blocks: blockchain.chain.len(),
         chain_valid: blockchain.is_valid(),
     })
@@ -365,7 +365,7 @@ fn block_created_page(result: &BlockCreationResult) -> String {
   <dd>{}</dd>
   <dt>mount token</dt>
   <dd>{}</dd>
-  <dt>three degree phi token</dt>
+  <dt>degree three phi token</dt>
   <dd>{}</dd>
   <dt>chain blocks</dt>
   <dd>{}</dd>
@@ -377,7 +377,7 @@ fn block_created_page(result: &BlockCreationResult) -> String {
         result.block_index,
         html_escape(&result.block_hash),
         html_escape(&result.mount_token),
-        html_escape(&result.three_degree_phi_token),
+        html_escape(&result.degree_three_phi_token),
         result.chain_blocks,
         result.chain_valid,
         example_dids = example_dids
