@@ -96,6 +96,45 @@ Without that external witness data, the stored block proves only that the
 authority approved the aggregate `three_degree_phi_token`; it does not reveal or
 reconstruct the three parties, their roles, or the amount.
 
+## Amount Token Duplication Caveat
+
+The amount duplication rule is about the subject of a chained transaction:
+
+```text
+amount_token_subject = amount_token_group + amount * subject_key
+```
+
+When the previous participant becomes the new subject, `amount_token_group` is
+the previous participant amount token. The subject sum can show the structural
+duplication of `amount * subject_key`, but the sum alone is not sufficient to
+prove the claimed `amount_token_subject`.
+
+The impersonation issue is that a structurally valid group sum can be presented
+as if it came from a claimed subject. The expression can contain an
+`amount * subject_key` term, but the sum alone does not prove that the claimed
+subject DID authorized that term or agreed to act as the subject in the
+transaction.
+
+The important security check is the per-role signature verification:
+
+```text
+subject_signature verifies subject_did over amount_token_subject
+witness_signature verifies witness_did over amount_token_witness
+participant_signature verifies participant_did over amount_token_participant
+```
+
+The subject signature binds the duplicated subject amount token to the claimed
+subject DID. The witness and participant signatures bind their own role-specific
+amount tokens to their DIDs. The aggregate `three_degree_phi_token` is then
+checked as:
+
+```text
+subject_signature + witness_signature + participant_signature == three_degree_phi_token
+```
+
+It should be treated as a compact receipt for those verified signatures, not as
+a standalone proof of identity, role assignment, or non-reuse.
+
 ## Can Two Parties Deduce The Third DID?
 
 No.
