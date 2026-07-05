@@ -195,6 +195,104 @@ Omit `--print-blocks` for longer runs. The load test prints accepted/rejected
 operation counts, two-party proof checks, final chain validity, and elapsed
 time.
 
+## Amount Token Submission API
+
+Run a local amount token API with:
+
+```bash
+cargo run --bin amount_token_api -- 127.0.0.1:8787
+```
+
+The API starts an in-memory blockchain with a hardcoded demo authority key
+derived from seed `42`. Check its status with:
+
+```bash
+curl http://127.0.0.1:8787/blockchain
+```
+
+Derive an amount token from that authority DID key with:
+
+```bash
+curl 'http://127.0.0.1:8787/amount-token?amount=7'
+```
+
+To derive it from another DID key, pass `challenge` explicitly:
+
+```bash
+curl 'http://127.0.0.1:8787/amount-token?amount=7&challenge=did%3Akey%3A...'
+```
+
+Hardcoded demo DID keys are:
+
+```text
+subject DID: did:key:z3tEFHKPLWzgC9mXrQj6PiDzxmfMCPdb1JUWkWnaeaZCXDRhHhmjv5knBohRaZEncfsr5i
+witness DID: did:key:z3tEG1BgUeeVmofi5MV3cU7LaYeocm9Ne2QkBPDdpDozyBCKjYgWa1VpStYho9EhC9P7vh
+participant DID: did:key:z3tEGSKFD3nuGm4JqErNTVUYzeksa2Hs6P3C9rpFp93CbYQNDkyScdC7JPa8xojkatS4kA
+```
+
+Open a challenge URL to display a client submission form for one
+`amount_token` challenge:
+
+```text
+http://127.0.0.1:8787/amount-token/challenge?role=subject&challenge=did%3Akey%3Aexample
+```
+
+The page derives the demo `did_key` from the `role`. Its JavaScript signs the
+challenge automatically for the hardcoded demo keys, fills the `signature`
+field, and submits the form. For a real wallet, replace the default demo signer
+with `window.phiCryptoSign`.
+
+Manual submission is still supported:
+
+```bash
+curl -X POST http://127.0.0.1:8787/amount-token/submit \
+  -H 'content-type: application/x-www-form-urlencoded' \
+  --data 'role=subject&did_key=did%3Akey%3A...&challenge=did%3Akey%3Aexample&signature=...'
+```
+
+It returns:
+
+```json
+{
+  "did_key": "did:key:...",
+  "role": "subject",
+  "proof": {
+    "challenge": "did:key:example",
+    "signature": "..."
+  }
+}
+```
+
+The signed challenge is returned as `proof.challenge` plus `proof.signature`,
+and the response is shaped so it can be passed into the next role-signature
+collection step.
+
+Start a full subject -> witness -> participant signing flow with:
+
+```text
+http://127.0.0.1:8787/amount-token/start?amount=7
+```
+
+The start route redirects to the first challenge page. Challenge pages do not
+keep the three role DIDs in query parameters or form fields. Instead, they
+display the hardcoded demo subject, witness, and participant DIDs in the page
+body under `example DIDs`.
+
+For local demos, challenge construction uses those hardcoded demo DIDs. The
+client or wallet must sign each role challenge locally and POST the DID plus
+signature.
+
+Each valid POST appends the signed submission into a `submissions` query
+parameter and redirects through:
+
+```text
+subject -> witness -> participant -> block creation
+```
+
+After the participant signs, the API aggregates the three submissions into
+`three_degree_phi_token`, adds a block to the in-memory blockchain, and returns
+an HTML block creation receipt.
+
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
