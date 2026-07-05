@@ -12,7 +12,8 @@ const BLS12_381_G1_PUBLIC_KEY_LENGTH: usize = 48;
 const BLS12_381_G1_DID_KEY_LENGTH: usize =
     BLS12_381_G1_DID_KEY_PREFIX.len() + BLS12_381_G1_PUBLIC_KEY_LENGTH;
 pub const BLS_SIGNATURE_DST: &[u8] = b"PHI_CRYPTO_BLS12_381_PROOF_V1";
-pub const DIDS_PER_BLOCK: usize = 3;
+pub const MIN_DIDS_PER_BLOCK: usize = 2;
+pub const MAX_DIDS_PER_BLOCK: usize = 3;
 pub const MAX_AMOUNT: u8 = 99;
 
 #[derive(Debug, Clone)]
@@ -178,9 +179,9 @@ impl DidKeyBlock {
         previous_participant_amount: Option<u8>,
         previous_participant_amount_token: Option<&str>,
     ) -> Result<Self, OwnershipProofError> {
-        if records.len() != DIDS_PER_BLOCK {
+        if !valid_did_count(records.len()) {
             return Err(OwnershipProofError::WrongDidCount {
-                expected: DIDS_PER_BLOCK,
+                expected: MAX_DIDS_PER_BLOCK,
                 actual: records.len(),
             });
         }
@@ -274,7 +275,7 @@ fn verify_roles_for_records(records: &[DidKeyRecord]) -> Result<(), OwnershipPro
         });
     }
 
-    if witness_count != 1 {
+    if witness_count > 1 {
         return Err(OwnershipProofError::WrongWitnessCount {
             expected: 1,
             actual: witness_count,
@@ -294,9 +295,9 @@ fn verify_roles_for_records(records: &[DidKeyRecord]) -> Result<(), OwnershipPro
 fn verify_supported_did_keys_for_records(
     records: &[DidKeyRecord],
 ) -> Result<(), OwnershipProofError> {
-    if records.len() != DIDS_PER_BLOCK {
+    if !valid_did_count(records.len()) {
         return Err(OwnershipProofError::WrongDidCount {
-            expected: DIDS_PER_BLOCK,
+            expected: MAX_DIDS_PER_BLOCK,
             actual: records.len(),
         });
     }
@@ -311,9 +312,9 @@ fn verify_supported_did_keys_for_records(
 fn verify_ownership_proofs_for_records(
     records: &[DidKeyRecord],
 ) -> Result<(), OwnershipProofError> {
-    if records.len() != DIDS_PER_BLOCK {
+    if !valid_did_count(records.len()) {
         return Err(OwnershipProofError::WrongDidCount {
-            expected: DIDS_PER_BLOCK,
+            expected: MAX_DIDS_PER_BLOCK,
             actual: records.len(),
         });
     }
@@ -477,7 +478,14 @@ pub fn amount_tokens_for_records(
 
     Ok(AmountTokens {
         subject: amount_token_for_role(records, DidRole::Subject, amount, &amount_public_key)?,
-        witness: amount_token_for_role(records, DidRole::Witness, amount, &amount_public_key)?,
+        witness: optional_amount_token_for_role(
+            records,
+            DidRole::Witness,
+            amount,
+            &amount_public_key,
+        )
+        .transpose()?
+        .unwrap_or_default(),
         participant: amount_token_for_role(
             records,
             DidRole::Participant,
@@ -515,6 +523,22 @@ fn amount_token_for_role(
     let role_public_key = public_key_from_did_key(&role_amount_token)?;
 
     aggregate_public_keys(&[amount_public_key, &role_public_key])
+}
+
+fn optional_amount_token_for_role(
+    records: &[DidKeyRecord],
+    role: DidRole,
+    amount: u8,
+    amount_public_key: &PublicKey,
+) -> Option<Result<String, OwnershipProofError>> {
+    records
+        .iter()
+        .any(|record| record.role == role)
+        .then(|| amount_token_for_role(records, role, amount, amount_public_key))
+}
+
+fn valid_did_count(count: usize) -> bool {
+    (MIN_DIDS_PER_BLOCK..=MAX_DIDS_PER_BLOCK).contains(&count)
 }
 
 pub fn three_degree_phi_token_authority_challenge(three_degree_phi_token: &str) -> String {

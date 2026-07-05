@@ -171,6 +171,7 @@ fn amount_token_response(did_key: &str, amount: u8, amount_token: &str) -> Strin
 #[derive(Debug, Clone)]
 struct FlowParams {
     amount: u8,
+    witness_enabled: bool,
     subject_did_key: String,
     witness_did_key: String,
     participant_did_key: String,
@@ -183,6 +184,7 @@ impl FlowParams {
                 .unwrap_or("7")
                 .parse::<u8>()
                 .map_err(|_| ApiError::bad_request("amount must be an integer"))?,
+            witness_enabled: optional_bool_param(query, "witness").unwrap_or(true),
             subject_did_key: did_key_param(query, "subject")?,
             witness_did_key: did_key_param(query, "witness")?,
             participant_did_key: did_key_param(query, "participant")?,
@@ -225,14 +227,26 @@ fn amount_token_challenges(
 }
 
 fn flow_records_without_proofs(flow: &FlowParams) -> Vec<DidKeyRecord> {
-    [
+    let mut records = [
         (DidRole::Subject, flow.subject_did_key.as_str()),
-        (DidRole::Witness, flow.witness_did_key.as_str()),
         (DidRole::Participant, flow.participant_did_key.as_str()),
     ]
     .into_iter()
     .map(|(role, did_key)| DidKeyRecord::new(did_key, role, OwnershipProof::new("", "")))
-    .collect()
+    .collect::<Vec<_>>();
+
+    if flow.witness_enabled {
+        records.insert(
+            1,
+            DidKeyRecord::new(
+                flow.witness_did_key.as_str(),
+                DidRole::Witness,
+                OwnershipProof::new("", ""),
+            ),
+        );
+    }
+
+    records
 }
 
 fn continue_flow(
@@ -248,10 +262,15 @@ fn continue_flow(
     match parse_role(required_param(form, "role")?)? {
         DidRole::Subject => {
             let challenges = amount_token_challenges(state, &flow)?;
+            let (next_role, next_challenge) = if flow.witness_enabled {
+                (DidRole::Witness, challenges.witness.as_str())
+            } else {
+                (DidRole::Participant, challenges.participant.as_str())
+            };
             let location = challenge_location(
                 &flow,
-                DidRole::Witness,
-                &challenges.witness,
+                next_role,
+                next_challenge,
                 &serialize_submissions(&submissions),
             );
 
@@ -372,8 +391,9 @@ fn challenge_location(
     submissions: &str,
 ) -> String {
     format!(
-        "/amount-token/challenge?flow=1&amount={}&role={}&challenge={}&submissions={}",
+        "/amount-token/challenge?flow=1&amount={}&witness={}&role={}&challenge={}&submissions={}",
         flow.amount,
+        flow.witness_enabled,
         role.as_str(),
         url_encode(challenge),
         url_encode(submissions)
@@ -465,6 +485,15 @@ fn optional_param<'a>(params: &'a HashMap<String, String>, name: &str) -> Option
     params.get(name).map(String::as_str)
 }
 
+fn optional_bool_param(params: &HashMap<String, String>, name: &str) -> Option<bool> {
+    optional_param(params, name).map(|value| {
+        !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
+}
+
 fn parse_role(value: &str) -> Result<DidRole, ApiError> {
     match value {
         "subject" => Ok(DidRole::Subject),
@@ -482,7 +511,7 @@ fn challenge_page(
     role: &str,
     query: &HashMap<String, String>,
 ) -> String {
-    let hidden_inputs = ["flow", "amount", "submissions"]
+    let hidden_inputs = ["flow", "amount", "witness", "submissions"]
         .into_iter()
         .filter_map(|name| {
             query.get(name).map(|value| {

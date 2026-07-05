@@ -3,10 +3,11 @@
 A small Rust blockchain experiment using BLS12-381 `did:key` identifiers.
 
 The chain has a square-mined genesis block. Public-key blocks are mined by
-verifying an amount proof protocol between three roles:
+verifying an amount proof protocol between two required roles and one optional
+role:
 
 - subject
-- witness
+- witness, optional
 - participant
 
 Each public-key block is now a receipt: it stores only the accepted
@@ -27,22 +28,22 @@ fresh amount_token_group = authority_key
 linked amount_token_group = previous_participant_amount_token
 ```
 
-The parties derive an amount token for each role:
+The parties derive an amount token for each participating role:
 
 ```text
 amount_token_subject = amount_token_group + amount * subject_key
-amount_token_witness = amount_token_group + amount * witness_key
+amount_token_witness = amount_token_group + amount * witness_key, when present
 amount_token_participant = amount_token_group + amount * participant_key
 ```
 
 These are public group keys. They prove the block used the same amount
 duplication count for each role key.
 
-Each party signs its own role amount token:
+Each participating party signs its own role amount token:
 
 ```text
 subject_signature = sign(subject_key, amount_token_subject)
-witness_signature = sign(witness_key, amount_token_witness)
+witness_signature = sign(witness_key, amount_token_witness), when present
 participant_signature = sign(participant_key, amount_token_participant)
 ```
 
@@ -50,7 +51,7 @@ The submitted `three_degree_phi_token` is the aggregate of those signatures:
 
 ```text
 three_degree_phi_token =
-  subject_signature + witness_signature + participant_signature
+  subject_signature + optional(witness_signature) + participant_signature
 ```
 
 During block creation, the block verifies the submitted aggregate and the
@@ -197,6 +198,8 @@ time.
 
 ## Amount Token Submission API
 
+### Run The API
+
 Run a local amount token API with:
 
 ```bash
@@ -210,7 +213,19 @@ derived from seed `42`. Check its status with:
 curl http://127.0.0.1:8787/blockchain
 ```
 
-Derive an amount token from that authority DID key with:
+### Demo DID Keys
+
+Hardcoded demo DID keys are:
+
+```text
+subject DID: did:key:z3tEFHKPLWzgC9mXrQj6PiDzxmfMCPdb1JUWkWnaeaZCXDRhHhmjv5knBohRaZEncfsr5i
+witness DID: did:key:z3tEG1BgUeeVmofi5MV3cU7LaYeocm9Ne2QkBPDdpDozyBCKjYgWa1VpStYho9EhC9P7vh
+participant DID: did:key:z3tEGSKFD3nuGm4JqErNTVUYzeksa2Hs6P3C9rpFp93CbYQNDkyScdC7JPa8xojkatS4kA
+```
+
+### Amount Token Derivation
+
+Derive an amount token from the authority DID key with:
 
 ```bash
 curl 'http://127.0.0.1:8787/amount-token?amount=7'
@@ -222,13 +237,7 @@ To derive it from another DID key, pass `challenge` explicitly:
 curl 'http://127.0.0.1:8787/amount-token?amount=7&challenge=did%3Akey%3A...'
 ```
 
-Hardcoded demo DID keys are:
-
-```text
-subject DID: did:key:z3tEFHKPLWzgC9mXrQj6PiDzxmfMCPdb1JUWkWnaeaZCXDRhHhmjv5knBohRaZEncfsr5i
-witness DID: did:key:z3tEG1BgUeeVmofi5MV3cU7LaYeocm9Ne2QkBPDdpDozyBCKjYgWa1VpStYho9EhC9P7vh
-participant DID: did:key:z3tEGSKFD3nuGm4JqErNTVUYzeksa2Hs6P3C9rpFp93CbYQNDkyScdC7JPa8xojkatS4kA
-```
+### Single Challenge Signing
 
 Open a challenge URL to display a client submission form for one
 `amount_token` challenge:
@@ -267,10 +276,18 @@ The signed challenge is returned as `proof.challenge` plus `proof.signature`,
 and the response is shaped so it can be passed into the next role-signature
 collection step.
 
+### Block Creation Flow
+
 Start a full subject -> witness -> participant signing flow with:
 
 ```text
 http://127.0.0.1:8787/amount-token/start?amount=7
+```
+
+Skip the optional witness with:
+
+```text
+http://127.0.0.1:8787/amount-token/start?amount=7&witness=false
 ```
 
 The start route redirects to the first challenge page. Challenge pages do not
@@ -286,10 +303,10 @@ Each valid POST appends the signed submission into a `submissions` query
 parameter and redirects through:
 
 ```text
-subject -> witness -> participant -> block creation
+subject -> optional(witness) -> participant -> block creation
 ```
 
-After the participant signs, the API aggregates the three submissions into
+After the participant signs, the API aggregates the submissions into
 `three_degree_phi_token`, adds a block to the in-memory blockchain, and returns
 an HTML block creation receipt.
 

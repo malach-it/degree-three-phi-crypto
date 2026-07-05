@@ -441,6 +441,49 @@ mod tests {
     }
 
     #[test]
+    fn public_key_block_accepts_optional_witness() {
+        let authority_key = bls_secret_key(42);
+        let authority_did = did_key_for_secret_key(&authority_key);
+        let mut blockchain = Blockchain::new(12, authority_key);
+        let subject_key = bls_secret_key(1);
+        let participant_key = bls_secret_key(3);
+        let records = vec![
+            DidKeyRecord::new(
+                did_key_for_secret_key(&subject_key),
+                DidRole::Subject,
+                OwnershipProof::new("", ""),
+            ),
+            DidKeyRecord::new(
+                did_key_for_secret_key(&participant_key),
+                DidRole::Participant,
+                OwnershipProof::new("", ""),
+            ),
+        ];
+        let amount_tokens = amount_tokens_for_records(&records, 7, &authority_did)
+            .expect("amount tokens should derive without witness");
+        let submissions = vec![
+            did_submission_for_key_with_challenge(
+                &subject_key,
+                DidRole::Subject,
+                &amount_tokens.subject,
+            ),
+            did_submission_for_key_with_challenge(
+                &participant_key,
+                DidRole::Participant,
+                &amount_tokens.participant,
+            ),
+        ];
+        let three_degree_phi_token = three_degree_phi_token_for_submissions(&submissions);
+
+        blockchain
+            .add_public_key_block(submissions, 7, three_degree_phi_token)
+            .expect("witness should be optional");
+
+        assert_eq!(blockchain.chain.len(), 2);
+        assert!(blockchain.is_valid());
+    }
+
+    #[test]
     fn receipt_block_creation_verifies_records_without_storing_them() {
         let authority_key = bls_secret_key(42);
         let authority_did = did_key_for_secret_key(&authority_key);
