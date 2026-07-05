@@ -299,7 +299,7 @@ fn continue_flow(
 struct BlockCreationResult {
     block_index: u64,
     block_hash: String,
-    mount_token: String,
+    amount_token: String,
     degree_three_phi_token: String,
     chain_blocks: usize,
     chain_valid: bool,
@@ -339,7 +339,7 @@ fn create_flow_block(
     Ok(BlockCreationResult {
         block_index: block.index,
         block_hash: block.hash.clone(),
-        mount_token: blockchain
+        amount_token: blockchain
             .current_participant_amount_token()
             .expect("accepted block should register a participant amount token")
             .to_string(),
@@ -363,7 +363,7 @@ fn block_created_page(result: &BlockCreationResult) -> String {
   <dd>{}</dd>
   <dt>block hash</dt>
   <dd>{}</dd>
-  <dt>mount token</dt>
+  <dt>amount token</dt>
   <dd>{}</dd>
   <dt>degree three phi token</dt>
   <dd>{}</dd>
@@ -376,7 +376,7 @@ fn block_created_page(result: &BlockCreationResult) -> String {
 </html>"#,
         result.block_index,
         html_escape(&result.block_hash),
-        html_escape(&result.mount_token),
+        html_escape(&result.amount_token),
         html_escape(&result.degree_three_phi_token),
         result.chain_blocks,
         result.chain_valid,
