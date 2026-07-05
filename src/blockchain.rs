@@ -30,41 +30,41 @@ impl Blockchain {
         &mut self,
         submissions: Vec<DidKeySubmission>,
         amount: u8,
-        amount_proof_key: String,
+        three_degree_phi_token: String,
     ) -> Result<(), OwnershipProofError> {
         let records = submissions
             .into_iter()
             .map(DidKeySubmission::into_verified_record)
             .collect::<Result<Vec<_>, _>>()?;
         let previous_state = self.public_key_state.clone();
-        let three_degree_phi_tokens = crate::did::three_degree_phi_tokens_for_records(
+        let amount_tokens = crate::did::amount_tokens_for_records(
             &records,
             amount,
-            &crate::did::three_degree_phi_token_group_for_block(
+            &crate::did::amount_token_group_for_block(
                 &records,
                 amount,
                 &self.amount_authority_did_key,
                 previous_state.participant_did_key.as_deref(),
                 previous_state.amount,
-                previous_state.participant_three_degree_phi_token.as_deref(),
+                previous_state.participant_amount_token.as_deref(),
             )?,
         )?;
         let participant_did_key = participant_did_key_for_records(&records)?.to_string();
         let block = DidKeyBlock::new(
             records,
             amount,
-            amount_proof_key,
+            three_degree_phi_token,
             &self.amount_authority_key,
             previous_state.participant_did_key.as_deref(),
             previous_state.amount,
-            previous_state.participant_three_degree_phi_token.as_deref(),
+            previous_state.participant_amount_token.as_deref(),
         )?;
 
         self.add_block(BlockData::PublicKeys(block));
         self.public_key_state = PublicKeyState {
             participant_did_key: Some(participant_did_key),
             amount: Some(amount),
-            participant_three_degree_phi_token: Some(three_degree_phi_tokens.participant),
+            participant_amount_token: Some(amount_tokens.participant),
         };
         Ok(())
     }
@@ -97,10 +97,8 @@ impl Blockchain {
     }
 
     #[allow(dead_code)]
-    pub fn current_participant_three_degree_phi_token(&self) -> Option<&str> {
-        self.public_key_state
-            .participant_three_degree_phi_token
-            .as_deref()
+    pub fn current_participant_amount_token(&self) -> Option<&str> {
+        self.public_key_state.participant_amount_token.as_deref()
     }
 
     fn add_block(&mut self, data: BlockData) {
@@ -136,7 +134,7 @@ impl Blockchain {
 struct PublicKeyState {
     participant_did_key: Option<String>,
     amount: Option<u8>,
-    participant_three_degree_phi_token: Option<String>,
+    participant_amount_token: Option<String>,
 }
 
 fn participant_did_key_for_records(
