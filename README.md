@@ -73,6 +73,8 @@ because the block no longer stores the amount or DID records.
 
 ## Three-Party Block Verification
 
+![Three Degree Phi coin](images/three-degree-phi-coin.png)
+
 The three parties can still verify a block together if they retain or exchange
 the transaction witness data used at creation time:
 
