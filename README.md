@@ -1,4 +1,4 @@
-# phi-crypto
+# three-degree-phi-crypto
 
 A small Rust blockchain experiment using BLS12-381 `did:key` identifiers.
 
@@ -58,7 +58,7 @@ authority signs the accepted three degree phi token:
 
 ```text
 three_degree_phi_token_authority_signature =
-  sign(authority_key, "authorize phi-crypto three degree phi token {three_degree_phi_token}")
+  sign(authority_key, "authorize three-degree-phi-crypto three degree phi token {three_degree_phi_token}")
 ```
 
 At block creation, the chain recomputes the role amount tokens, checks that

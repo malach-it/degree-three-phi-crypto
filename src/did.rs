@@ -518,7 +518,7 @@ fn amount_token_for_role(
 }
 
 pub fn three_degree_phi_token_authority_challenge(three_degree_phi_token: &str) -> String {
-    format!("authorize phi-crypto three degree phi token {three_degree_phi_token}")
+    format!("authorize three-degree-phi-crypto three degree phi token {three_degree_phi_token}")
 }
 
 fn sign_three_degree_phi_token_authority_proof(
