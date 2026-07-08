@@ -20,7 +20,9 @@ use std::collections::HashMap;
 use std::env;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 const DEFAULT_ADDR: &str = "127.0.0.1:8787";
 const DEFAULT_DIFFICULTY_BITS: u8 = 1;
@@ -33,10 +35,10 @@ fn main() {
     let listener = TcpListener::bind(&addr).expect("amount-token API should bind");
     let authority_key = bls_secret_key(AUTHORITY_SEED);
     let authority_did_key = did_key_from_bls12_381_public_key(&authority_key.sk_to_pk().compress());
-    let state = ApiState {
+    let state = Arc::new(ApiState {
         blockchain: Mutex::new(Blockchain::new(DEFAULT_DIFFICULTY_BITS, authority_key)),
         authority_did_key,
-    };
+    });
 
     println!("amount_token_api listening on http://{addr}");
     println!("blockchain authority did {}", state.authority_did_key);
@@ -47,15 +49,18 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                if let Err(error) = handle_connection(&mut stream, &state) {
-                    let body = json_error(&error.to_string());
-                    let _ = write_response(
-                        &mut stream,
-                        "500 Internal Server Error",
-                        "application/json",
-                        &body,
-                    );
-                }
+                let state = Arc::clone(&state);
+                thread::spawn(move || {
+                    if let Err(error) = handle_connection(&mut stream, &state) {
+                        let body = json_error(&error.to_string());
+                        let _ = write_response(
+                            &mut stream,
+                            "500 Internal Server Error",
+                            "application/json",
+                            &body,
+                        );
+                    }
+                });
             }
             Err(error) => eprintln!("amount_token_api connection error: {error}"),
         }
@@ -103,25 +108,26 @@ fn handle_connection(stream: &mut TcpStream, state: &ApiState) -> Result<(), Api
             write_redirect(stream, &location)?;
         }
         ("GET", "/amount-token/challenge") => {
-            let challenge = required_param(&request.query, "challenge")?;
             let role = optional_param(&request.query, "role").unwrap_or("subject");
             let role = parse_role(role)?;
+            let challenge = challenge_param_or_flow(state, &request.query, role)?;
             let did_key = demo_did_key_for_role(role);
-            let body = challenge_page(challenge, &did_key, role.as_str(), &request.query);
+            let body = challenge_page(&challenge, &did_key, role.as_str(), &request.query);
 
             write_response(stream, "200 OK", "text/html", &body)?;
         }
         ("POST", "/amount-token/demo-sign") => {
             let form = parse_form(&request.body);
-            let challenge = required_param(&form, "challenge")?;
             let role = parse_role(optional_param(&form, "role").unwrap_or("subject"))?;
-            let signature = demo_signature_for_role(role, challenge);
+            let challenge = challenge_param_or_flow(state, &form, role)?;
+            let signature = demo_signature_for_role(role, &challenge);
             let body = format!(r#"{{"signature":"{}"}}"#, json_escape(&signature));
 
             write_response(stream, "200 OK", "application/json", &body)?;
         }
         ("POST", "/amount-token/sign") | ("POST", "/amount-token/submit") => {
-            let form = parse_form(&request.body);
+            let mut form = parse_form(&request.body);
+            fill_missing_flow_challenge(state, &mut form)?;
             let submission = submission_from_form(&form)?;
 
             if optional_param(&form, "flow") == Some("1") {
@@ -224,6 +230,56 @@ fn amount_token_challenges(
 
     amount_tokens_for_records(&records, flow.amount, &amount_token_group)
         .map_err(|error| ApiError::bad_request(error.to_string()))
+}
+
+fn challenge_param_or_flow(
+    state: &ApiState,
+    params: &HashMap<String, String>,
+    role: DidRole,
+) -> Result<String, ApiError> {
+    if let Some(challenge) = optional_param(params, "challenge").filter(|value| !value.is_empty()) {
+        return Ok(challenge.to_string());
+    }
+
+    if optional_param(params, "flow") == Some("1") || optional_param(params, "amount").is_some() {
+        let flow = FlowParams::from_query(params)?;
+        return Ok(amount_token_challenge_for_role(state, &flow, role)?.to_string());
+    }
+
+    Err(ApiError::bad_request("missing challenge"))
+}
+
+fn fill_missing_flow_challenge(
+    state: &ApiState,
+    form: &mut HashMap<String, String>,
+) -> Result<(), ApiError> {
+    if optional_param(form, "challenge").filter(|value| !value.is_empty()).is_some() {
+        return Ok(());
+    }
+
+    if optional_param(form, "flow") != Some("1") {
+        return Ok(());
+    }
+
+    let role = parse_role(optional_param(form, "role").unwrap_or("subject"))?;
+    let challenge = challenge_param_or_flow(state, form, role)?;
+    form.insert("challenge".to_string(), challenge);
+
+    Ok(())
+}
+
+fn amount_token_challenge_for_role(
+    state: &ApiState,
+    flow: &FlowParams,
+    role: DidRole,
+) -> Result<String, ApiError> {
+    let challenges = amount_token_challenges(state, flow)?;
+
+    Ok(match role {
+        DidRole::Subject => challenges.subject,
+        DidRole::Witness => challenges.witness,
+        DidRole::Participant => challenges.participant,
+    })
 }
 
 fn flow_records_without_proofs(flow: &FlowParams) -> Vec<DidKeyRecord> {
@@ -410,12 +466,23 @@ struct HttpRequest {
 
 impl HttpRequest {
     fn read(stream: &mut TcpStream) -> Result<Self, ApiError> {
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         let mut buffer = [0u8; 8192];
-        let bytes_read = stream.read(&mut buffer)?;
-        let request = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
-        let (head, body_start) = request
-            .split_once("\r\n\r\n")
-            .ok_or_else(|| ApiError::bad_request("invalid HTTP request"))?;
+        let mut request = Vec::new();
+
+        let header_end = loop {
+            let bytes_read = stream.read(&mut buffer)?;
+            if bytes_read == 0 {
+                return Err(ApiError::bad_request("empty HTTP request"));
+            }
+            request.extend_from_slice(&buffer[..bytes_read]);
+
+            if let Some(header_end) = find_header_end(&request) {
+                break header_end;
+            }
+        };
+
+        let head = String::from_utf8_lossy(&request[..header_end]).to_string();
         let mut lines = head.lines();
         let request_line = lines
             .next()
@@ -428,6 +495,7 @@ impl HttpRequest {
         let target = request_parts
             .next()
             .ok_or_else(|| ApiError::bad_request("missing target"))?;
+        let target = target.to_string();
         let content_length = lines
             .filter_map(|line| line.split_once(':'))
             .find_map(|(name, value)| {
@@ -438,12 +506,18 @@ impl HttpRequest {
                 }
             })
             .unwrap_or(0);
-        let body = if content_length <= body_start.len() {
-            body_start[..content_length].to_string()
-        } else {
-            body_start.to_string()
-        };
-        let (path, query) = parse_target(target);
+        let body_start = header_end + 4;
+        while request.len().saturating_sub(body_start) < content_length {
+            let bytes_read = stream.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..bytes_read]);
+        }
+
+        let body_end = body_start + content_length.min(request.len().saturating_sub(body_start));
+        let body = String::from_utf8_lossy(&request[body_start..body_end]).to_string();
+        let (path, query) = parse_target(&target);
 
         Ok(Self {
             method,
@@ -452,6 +526,12 @@ impl HttpRequest {
             body,
         })
     }
+}
+
+fn find_header_end(request: &[u8]) -> Option<usize> {
+    request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
 }
 
 fn parse_target(target: &str) -> (String, HashMap<String, String>) {
@@ -542,7 +622,17 @@ fn challenge_page(
 </form>
 <script>
 window.phiCryptoDemoSign = async ({{ challenge, role }}) => {{
-  const body = new URLSearchParams({{ challenge, role }});
+  const body = new URLSearchParams();
+  if (challenge) {{
+    body.set('challenge', challenge);
+  }}
+  body.set('role', role);
+  for (const name of ['flow', 'amount', 'witness']) {{
+    const input = document.getElementById('sign')?.elements.namedItem(name);
+    if (input) {{
+      body.set(name, input.value);
+    }}
+  }}
   const response = await fetch('/amount-token/demo-sign', {{
     method: 'POST',
     headers: {{ 'content-type': 'application/x-www-form-urlencoded' }},
@@ -556,23 +646,35 @@ window.phiCryptoDemoSign = async ({{ challenge, role }}) => {{
 }};
 
 (async () => {{
-  const signer = window.phiCryptoSign || window.phiCryptoDemoSign;
-  if (!signer) {{
-    return;
-  }}
   const form = document.getElementById('sign');
-  form.signature.value = await signer({{
-    didKey: form.did_key.value,
-    challenge: form.challenge.value,
-    role: form.role.value
-  }});
+  const field = (name) => form.elements.namedItem(name);
+  const request = {{
+    didKey: field('did_key')?.value || "{did_key_js}",
+    challenge: field('challenge')?.value || "{challenge_js}",
+    role: field('role')?.value || "{role_js}"
+  }};
+  let signature;
+  if (window.phiCryptoSign) {{
+    try {{
+      signature = await window.phiCryptoSign(request);
+    }} catch (error) {{
+      console.warn('window.phiCryptoSign failed; using demo signer', error);
+      signature = await window.phiCryptoDemoSign(request);
+    }}
+  }} else {{
+    signature = await window.phiCryptoDemoSign(request);
+  }}
+  field('signature').value = signature;
 }})();
 </script>
 </body>
 </html>"#,
         challenge = html_escape(challenge),
+        challenge_js = json_escape(challenge),
         did_key = html_escape(did_key),
+        did_key_js = json_escape(did_key),
         role = html_escape(role),
+        role_js = json_escape(role),
         example_dids = example_dids,
         hidden_inputs = hidden_inputs
     )
