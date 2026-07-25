@@ -1,5 +1,6 @@
 import {
   ROLE_LEVELS,
+  amountTokenEntries,
   createForwardExchange,
   createTraitExchange,
   decryptPrivateValue,
@@ -227,6 +228,30 @@ function initials(name) {
 
 function shortDid(did) {
   return did.length > 35 ? `${did.slice(0, 19)}…${did.slice(-10)}` : did;
+}
+
+function renderAmountTokenSummary(receipt) {
+  const entries = amountTokenEntries(receipt).filter(({ kind }) => kind === "role");
+  if (!entries.length) return `<small class="helper">Pending accepted receipt</small>`;
+  return `<div class="amount-token-summary">${entries
+    .map(
+      ({ label, shortLabel, token }) =>
+        `<span title="${escapeHtml(`${label}: ${token}`)}"><b>${shortLabel}</b><code>${escapeHtml(shortDid(token))}</code></span>`,
+    )
+    .join("")}</div>`;
+}
+
+function renderAmountTokenDetails(receipt) {
+  const entries = amountTokenEntries(receipt);
+  if (!entries.length) {
+    return `<div class="notice">Amount tokens are created when the recipient accepts and the exchange receipt is committed.</div>`;
+  }
+  return `<section class="amount-token-panel"><div class="token-panel-heading"><div><h3>Amount tokens</h3><p>Compact disclosure-bound BLS group points</p></div><span class="status-pill">${entries.filter(({ kind }) => kind === "role").length} role tokens</span></div><div class="amount-token-list">${entries
+    .map(
+      ({ label, kind, token }) =>
+        `<div class="amount-token-row"><div><strong>${escapeHtml(label)}</strong><small>${kind === "base" ? "Custody chaining" : "Signed role token"}</small></div><code title="${escapeHtml(token)}">${escapeHtml(token)}</code><button class="button compact" data-action="copy-value" data-value="${escapeHtml(token)}">Copy</button></div>`,
+    )
+    .join("")}</div></section>`;
 }
 
 function ago(date) {
@@ -492,7 +517,7 @@ function renderAdministration() {
     <div style="padding:18px 19px 6px" class="panel-header"><div><h2>Disclosure ledger</h2><p>Revocable receipts for subject-to-subject exchanges</p></div></div>
     ${
       state.exchanges.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Exchange</th><th>Disclosed traits</th><th>Purpose</th><th>Validity</th><th>Receipt</th><th></th></tr></thead><tbody>${state.exchanges
+        ? `<div class="table-wrap"><table><thead><tr><th>Exchange</th><th>Disclosed traits</th><th>Purpose</th><th>Validity</th><th>Receipt</th><th>Amount tokens</th><th></th></tr></thead><tbody>${state.exchanges
             .slice()
             .reverse()
             .map((exchange) => {
@@ -501,6 +526,7 @@ function renderAdministration() {
                 <td><div class="trait-chips">${exchange.disclosures.map((trait) => `<span class="trait-chip">${escapeHtml(trait.name)}: ${escapeHtml(displayTraitValue(trait))}</span>`).join("")}</div></td>
                 <td>${escapeHtml(exchange.purpose)}</td><td><span class="status-pill ${validity.valid ? "" : "revoked"}">${validity.valid ? "dual-signed" : validity.reason}</span></td>
                 <td><div class="receipt-signers"><span class="${exchange.senderSignature ? "signed" : ""}">S ${exchange.senderSignature ? "✓" : "—"}</span>${exchange.witnessDid ? `<span class="${exchange.witnessSignature ? "signed" : ""}">W ${exchange.witnessSignature ? "✓" : "—"}</span>` : ""}<span class="${exchange.recipientSignature ? "signed" : ""}">R ${exchange.recipientSignature ? "✓" : "—"}</span></div><small class="mono" title="${escapeHtml(exchange.recipientSignature || exchange.witnessSignature || exchange.senderSignature || "")}">${escapeHtml(shortDid(exchange.recipientSignature || exchange.witnessSignature || exchange.senderSignature || "unsigned"))}</small></td>
+                <td>${renderAmountTokenSummary(exchange.groupReceipt)}</td>
                 <td><div class="form-actions" style="margin:0"><button class="button compact" data-action="inspect-receipt" data-id="${exchange.id}">Inspect</button>${
                   exchange.status === "pending_witness"
                     ? `<button class="button secondary compact" data-action="approve-witness" data-id="${exchange.id}">Witness & sign</button>`
@@ -715,6 +741,7 @@ function openReceiptInspector(id, revealedKeys = null, results = null) {
         })
         .join("")}</div>
       <div class="field"><label>Disclosure commitment</label><div class="contract">${escapeHtml(exchange.disclosureCommitment)}</div></div>
+      ${renderAmountTokenDetails(receipt)}
       ${receipt.blockHash ? `<div class="field"><label>On-chain block</label><div class="contract">#${receipt.blockIndex} · ${escapeHtml(receipt.blockHash)}</div></div>` : ""}
       <div class="form-actions"><button class="button" data-action="hide-receipt-parties" data-id="${exchange.id}">Hide all</button><button class="button secondary" data-action="apply-party-reveal" data-id="${exchange.id}">Reveal & verify selected</button><button class="button primary" data-action="verify-receipt-parties" data-id="${exchange.id}">Verify revealed</button></div>
     </div>`,

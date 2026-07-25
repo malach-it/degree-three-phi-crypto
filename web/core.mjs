@@ -166,6 +166,47 @@ export function traitVerificationPayload(ownerDid, trait) {
   });
 }
 
+export function amountTokenEntries(receipt = {}) {
+  receipt ||= {};
+  return [
+    {
+      key: "group",
+      label: "Group custody input",
+      shortLabel: "G",
+      kind: "base",
+      token: receipt.amountTokenGroup,
+    },
+    {
+      key: "subject",
+      label: "Subject amount token",
+      shortLabel: "S",
+      kind: "role",
+      token: receipt.subjectAmountToken,
+    },
+    {
+      key: "witness",
+      label: "Witness amount token",
+      shortLabel: "W",
+      kind: "role",
+      token: receipt.witnessAmountToken,
+    },
+    {
+      key: "participantBase",
+      label: "Recipient custody token",
+      shortLabel: "B",
+      kind: "base",
+      token: receipt.participantBaseAmountToken,
+    },
+    {
+      key: "participant",
+      label: "Recipient amount token",
+      shortLabel: "R",
+      kind: "role",
+      token: receipt.participantAmountToken,
+    },
+  ].filter(({ token }) => typeof token === "string" && token.length > 0);
+}
+
 export function createTraitExchange({
   sourceId,
   targetId,

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  amountTokenEntries,
   createForwardExchange,
   createTraitExchange,
   decryptPrivateValue,
@@ -15,6 +16,27 @@ import {
   traitVerificationPayload,
   witnessApprovalPayload,
 } from "./core.mjs";
+
+test("receipt amount token entries expose role and custody tokens", () => {
+  const entries = amountTokenEntries({
+    amountTokenGroup: "did:key:zGroup",
+    subjectAmountToken: "did:key:zSubject",
+    witnessAmountToken: null,
+    participantBaseAmountToken: "did:key:zCustody",
+    participantAmountToken: "did:key:zRecipient",
+  });
+
+  assert.deepEqual(
+    entries.map(({ key, token }) => [key, token]),
+    [
+      ["group", "did:key:zGroup"],
+      ["subject", "did:key:zSubject"],
+      ["participantBase", "did:key:zCustody"],
+      ["participant", "did:key:zRecipient"],
+    ],
+  );
+  assert.deepEqual(amountTokenEntries(null), []);
+});
 
 const identities = [
   { id: "owner", did: "did:phi:owner", role: "Owner", status: "active" },

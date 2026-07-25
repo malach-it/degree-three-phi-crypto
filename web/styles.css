@@ -176,6 +176,19 @@ tr:last-child td { border-bottom: 0; }
 .receipt-signers { display: flex; gap: 4px; margin-bottom: 4px; }
 .receipt-signers span { padding: 3px 6px; border-radius: 5px; background: #eef1ee; color: var(--muted); font-size: 8px; font-weight: 800; }
 .receipt-signers span.signed { background: var(--accent-soft); color: var(--accent); }
+.amount-token-summary { display: grid; gap: 4px; min-width: 180px; }
+.amount-token-summary span { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.amount-token-summary b { width: 17px; height: 17px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font-size: 8px; }
+.amount-token-summary code { max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 8px; }
+.amount-token-panel { display: grid; gap: 10px; margin: 15px 0; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: #fbfcfb; }
+.token-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.token-panel-heading h3 { margin: 0; font-size: 12px; }
+.token-panel-heading p { margin: 3px 0 0; color: var(--muted); font-size: 9px; }
+.amount-token-list { display: grid; gap: 6px; }
+.amount-token-row { display: grid; grid-template-columns: 120px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; background: white; border: 1px solid #e4e9e5; }
+.amount-token-row strong, .amount-token-row small { display: block; }
+.amount-token-row strong { font-size: 9px; }.amount-token-row small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.amount-token-row code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #385045; font-size: 8px; }
 .party-list { display: grid; gap: 7px; margin-bottom: 15px; }
 .party-row { display: grid; grid-template-columns: auto auto minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fafcfa; }
 .party-selector { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); cursor: pointer; }
@@ -226,4 +239,6 @@ tr:last-child td { border-bottom: 0; }
   .metric { padding: 14px; }.metric strong { font-size: 20px; }
   .top-actions .icon-button { display: none; }
   .field-pair, .trait-subject { grid-template-columns: 1fr; }
+  .amount-token-row { grid-template-columns: 1fr auto; }
+  .amount-token-row code { grid-column: 1 / -1; grid-row: 2; }
 }
