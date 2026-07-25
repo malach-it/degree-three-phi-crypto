@@ -2,18 +2,31 @@
 
 A small Rust blockchain experiment using BLS12-381 `did:key` identifiers.
 
-The chain has a square-mined genesis block. Public-key blocks are mined by
-verifying an amount proof protocol between two required roles and one optional
-role:
+## Phi Identity Console
 
-- subject
-- witness, optional
-- participant
+The local-first console manages privacy-scoped DIDs, hierarchical roles, owned
+identity information, and consented information exchanges. It keeps information
+ownership separate from the person described, so receiving a claim about
+another subject does not make that claim the recipient's own trait.
 
-Each public-key block is now a receipt: it stores only the accepted
-`degree_three_phi_token` and the authority signature over that token. The
-amount, role records, role tokens, and party signatures are verified when the
-block is created, but they are not persisted in the block.
+Exchanges create tamper-evident trait commitments and require sender and
+recipient BLS signatures. An optional witness can explicitly approve and sign
+the transaction. Receipts support expiry, revocation, selective party reveal,
+candidate-DID verification, and bounded redisclosure using
+`group_amount = 2^max_depth`.
+
+Run it with:
+
+```bash
+cargo run --bin identity_console
+```
+
+Then open `http://127.0.0.1:8790`. The Rust runtime generates genuine
+BLS12-381 `did:key` identifiers and authority attestations. Workspace data stays
+in browser `localStorage`; secret keys stay only in the process's in-memory
+vault and are lost on restart. The chain stores the accepted aggregate
+`degree_three_phi_token` and its authority signature, while detailed party and
+amount evidence remains off-chain.
 
 ## Amount Protocol
 
