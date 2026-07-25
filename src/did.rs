@@ -34,6 +34,10 @@ pub enum DidRole {
 pub struct DidKeyBlock {
     pub degree_three_phi_token: String,
     pub degree_three_phi_token_authority_proof: OwnershipProof,
+    pub disclosure_commitment: Option<String>,
+    pub disclosure_group_id: Option<String>,
+    pub disclosure_hop: Option<u8>,
+    pub disclosure_max_depth: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +74,7 @@ pub enum OwnershipProofError {
     InvalidSignatureEncoding(base64::DecodeError),
     InvalidPublicKey(BLST_ERROR),
     InvalidAmountToken(BLST_ERROR),
+    InvalidDisclosureCommitment,
     AmountDoesNotMatchToken { expected: u8, actual: u8 },
     ThreeDegreePhiTokenDoesNotMatch { expected: String, actual: String },
     AmountProofChallengeDoesNotMatch { expected: String, actual: String },
@@ -117,6 +122,12 @@ impl fmt::Display for OwnershipProofError {
             Self::InvalidPublicKey(error) => write!(f, "public key is invalid: {error:?}"),
             Self::InvalidAmountToken(error) => {
                 write!(f, "amount token is invalid: {error:?}")
+            }
+            Self::InvalidDisclosureCommitment => {
+                write!(
+                    f,
+                    "disclosure commitment must be φtrait_ followed by hexadecimal bytes"
+                )
             }
             Self::AmountDoesNotMatchToken { expected, actual } => {
                 write!(
@@ -179,6 +190,35 @@ impl DidKeyBlock {
         previous_participant_amount: Option<u8>,
         previous_participant_amount_token: Option<&str>,
     ) -> Result<Self, OwnershipProofError> {
+        Self::new_with_disclosure_commitment(
+            records,
+            amount,
+            degree_three_phi_token,
+            authority_signing_key,
+            previous_participant_did_key,
+            previous_participant_amount,
+            previous_participant_amount_token,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_disclosure_commitment(
+        records: Vec<DidKeyRecord>,
+        amount: u8,
+        degree_three_phi_token: String,
+        authority_signing_key: &SecretKey,
+        previous_participant_did_key: Option<&str>,
+        previous_participant_amount: Option<u8>,
+        previous_participant_amount_token: Option<&str>,
+        disclosure_commitment: Option<&str>,
+        disclosure_group_id: Option<&str>,
+        disclosure_hop: Option<u8>,
+        disclosure_max_depth: Option<u8>,
+    ) -> Result<Self, OwnershipProofError> {
         if !valid_did_count(records.len()) {
             return Err(OwnershipProofError::WrongDidCount {
                 expected: MAX_DIDS_PER_BLOCK,
@@ -197,11 +237,34 @@ impl DidKeyBlock {
             previous_participant_amount,
             previous_participant_amount_token,
         )?;
-        let amount_tokens = amount_tokens_for_records(&records, amount, &amount_token_group)?;
-        let degree_three_phi_token_authority_proof = sign_degree_three_phi_token_authority_proof(
-            authority_signing_key,
-            &degree_three_phi_token,
-        );
+        let base_amount_tokens = amount_tokens_for_records(&records, amount, &amount_token_group)?;
+        let amount_tokens = match (
+            disclosure_commitment,
+            disclosure_group_id,
+            disclosure_hop,
+            disclosure_max_depth,
+        ) {
+            (Some(commitment), Some(group_id), Some(hop), Some(max_depth)) => {
+                bind_amount_tokens_to_disclosure(
+                    &base_amount_tokens,
+                    commitment,
+                    group_id,
+                    hop,
+                    max_depth,
+                )?
+            }
+            (None, None, None, None) => base_amount_tokens.clone(),
+            _ => return Err(OwnershipProofError::InvalidDisclosureCommitment),
+        };
+        let degree_three_phi_token_authority_proof =
+            sign_degree_three_phi_token_authority_proof_with_disclosure(
+                authority_signing_key,
+                &degree_three_phi_token,
+                disclosure_commitment,
+                disclosure_group_id,
+                disclosure_hop,
+                disclosure_max_depth,
+            );
         verify_roles_for_records(&records)?;
         verify_supported_did_keys_for_records(&records)?;
         verify_degree_three_phi_token_for_records(&records, &degree_three_phi_token)?;
@@ -210,6 +273,10 @@ impl DidKeyBlock {
         let block = Self {
             degree_three_phi_token,
             degree_three_phi_token_authority_proof,
+            disclosure_commitment: disclosure_commitment.map(str::to_string),
+            disclosure_group_id: disclosure_group_id.map(str::to_string),
+            disclosure_hop,
+            disclosure_max_depth,
         };
         block.verify_degree_three_phi_token_authority_proof(&authority_did_key)?;
         Ok(block)
@@ -217,7 +284,11 @@ impl DidKeyBlock {
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
         format!(
-            "type=did-key-block;degree_three_phi_token={};degree_three_phi_token_authority_challenge={};degree_three_phi_token_authority_signature={}",
+            "type=did-key-block;disclosure_commitment={};disclosure_group_id={};disclosure_hop={};disclosure_max_depth={};degree_three_phi_token={};degree_three_phi_token_authority_challenge={};degree_three_phi_token_authority_signature={}",
+            self.disclosure_commitment.as_deref().unwrap_or(""),
+            self.disclosure_group_id.as_deref().unwrap_or(""),
+            self.disclosure_hop.map_or(String::new(), |value| value.to_string()),
+            self.disclosure_max_depth.map_or(String::new(), |value| value.to_string()),
             self.degree_three_phi_token,
             self.degree_three_phi_token_authority_proof.challenge,
             self.degree_three_phi_token_authority_proof.signature
@@ -229,7 +300,13 @@ impl DidKeyBlock {
         &self,
         authority_did_key: &str,
     ) -> Result<(), OwnershipProofError> {
-        let expected = degree_three_phi_token_authority_challenge(&self.degree_three_phi_token);
+        let expected = degree_three_phi_token_authority_challenge_with_disclosure(
+            &self.degree_three_phi_token,
+            self.disclosure_commitment.as_deref(),
+            self.disclosure_group_id.as_deref(),
+            self.disclosure_hop,
+            self.disclosure_max_depth,
+        );
 
         if self.degree_three_phi_token_authority_proof.challenge != expected {
             return Err(
@@ -545,11 +622,127 @@ pub fn degree_three_phi_token_authority_challenge(degree_three_phi_token: &str) 
     format!("authorize degree-three-phi-crypto degree three phi token {degree_three_phi_token}")
 }
 
-fn sign_degree_three_phi_token_authority_proof(
+pub fn degree_three_phi_token_authority_challenge_with_disclosure(
+    degree_three_phi_token: &str,
+    disclosure_commitment: Option<&str>,
+    disclosure_group_id: Option<&str>,
+    disclosure_hop: Option<u8>,
+    disclosure_max_depth: Option<u8>,
+) -> String {
+    match (
+        disclosure_commitment,
+        disclosure_group_id,
+        disclosure_hop,
+        disclosure_max_depth,
+    ) {
+        (Some(commitment), Some(group_id), Some(hop), Some(max_depth)) => {
+            format!(
+                "authorize degree-three-phi-crypto degree three phi token {degree_three_phi_token} disclosure commitment {commitment} group {group_id} hop {hop} max depth {max_depth}"
+            )
+        }
+        _ => degree_three_phi_token_authority_challenge(degree_three_phi_token),
+    }
+}
+
+pub fn scaled_disclosure_commitment(
+    disclosure_commitment: &str,
+    hop: u8,
+) -> Result<String, OwnershipProofError> {
+    let encoded = disclosure_commitment
+        .strip_prefix("φtrait_")
+        .filter(|value| !value.is_empty() && value.len().is_multiple_of(2))
+        .ok_or(OwnershipProofError::InvalidDisclosureCommitment)?;
+    let mut bytes = (0..encoded.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&encoded[index..index + 2], 16)
+                .map_err(|_| OwnershipProofError::InvalidDisclosureCommitment)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for _ in 0..hop {
+        let mut carry = 0u8;
+        for byte in bytes.iter_mut().rev() {
+            let next_carry = *byte >> 7;
+            *byte = (*byte << 1) | carry;
+            carry = next_carry;
+        }
+        if carry != 0 {
+            bytes.insert(0, carry);
+        }
+    }
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+pub fn bind_amount_token_to_disclosure(
+    base_amount_token: &str,
+    disclosure_commitment: &str,
+    group_id: &str,
+    role: DidRole,
+    hop: u8,
+    max_depth: u8,
+) -> Result<String, OwnershipProofError> {
+    let scaled_commitment = scaled_disclosure_commitment(disclosure_commitment, hop)?;
+    Ok(format!(
+        "phi-amount-token-v2|group_id={group_id}|role={}|hop={hop}|max_depth={max_depth}|base_amount_token={base_amount_token}|scaled_commitment={scaled_commitment}",
+        role.as_str()
+    ))
+}
+
+pub fn bind_amount_tokens_to_disclosure(
+    amount_tokens: &AmountTokens,
+    disclosure_commitment: &str,
+    group_id: &str,
+    hop: u8,
+    max_depth: u8,
+) -> Result<AmountTokens, OwnershipProofError> {
+    Ok(AmountTokens {
+        subject: bind_amount_token_to_disclosure(
+            &amount_tokens.subject,
+            disclosure_commitment,
+            group_id,
+            DidRole::Subject,
+            hop,
+            max_depth,
+        )?,
+        witness: (!amount_tokens.witness.is_empty())
+            .then(|| {
+                bind_amount_token_to_disclosure(
+                    &amount_tokens.witness,
+                    disclosure_commitment,
+                    group_id,
+                    DidRole::Witness,
+                    hop,
+                    max_depth,
+                )
+            })
+            .transpose()?
+            .unwrap_or_default(),
+        participant: bind_amount_token_to_disclosure(
+            &amount_tokens.participant,
+            disclosure_commitment,
+            group_id,
+            DidRole::Participant,
+            hop,
+            max_depth,
+        )?,
+    })
+}
+
+fn sign_degree_three_phi_token_authority_proof_with_disclosure(
     signing_key: &SecretKey,
     degree_three_phi_token: &str,
+    disclosure_commitment: Option<&str>,
+    disclosure_group_id: Option<&str>,
+    disclosure_hop: Option<u8>,
+    disclosure_max_depth: Option<u8>,
 ) -> OwnershipProof {
-    let challenge = degree_three_phi_token_authority_challenge(degree_three_phi_token);
+    let challenge = degree_three_phi_token_authority_challenge_with_disclosure(
+        degree_three_phi_token,
+        disclosure_commitment,
+        disclosure_group_id,
+        disclosure_hop,
+        disclosure_max_depth,
+    );
     let signature = signing_key.sign(challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
 
     OwnershipProof::new(challenge, base64url(&signature.compress()))

@@ -13,10 +13,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use blockchain::Blockchain;
 use blst::min_pk::SecretKey;
 use did::{
-    BLS_SIGNATURE_DST, DidKeyRecord, DidRole, OwnershipProof, amount_token_group_for_block,
-    amount_tokens_for_records, degree_three_phi_token_authority_challenge,
-    degree_three_phi_token_for_records, did_key_from_bls12_381_public_key,
-    verify_did_key_ownership,
+    BLS_SIGNATURE_DST, DidKeyRecord, DidKeySubmission, DidRole, OwnershipProof,
+    amount_token_group_for_block, amount_tokens_for_records, bind_amount_tokens_to_disclosure,
+    degree_three_phi_token_authority_challenge_with_disclosure, degree_three_phi_token_for_records,
+    did_key_from_bls12_381_public_key, verify_did_key_ownership,
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -44,6 +44,7 @@ struct ConsoleState {
 #[derive(Debug, Clone)]
 struct InformationGroupState {
     amount: u8,
+    disclosure_commitment: String,
     current_holder_did: String,
     participant_amount_token: String,
     hop: u8,
@@ -281,6 +282,10 @@ fn commit_group_exchange(body: &str, state: &ConsoleState) -> Result<String, Str
     let fields = parse_form(body);
     let exchange_id = required_field(&fields, "exchange_id")?;
     let group_id = required_field(&fields, "group_id")?;
+    let disclosure_commitment = required_field(&fields, "disclosure_commitment")?;
+    if !disclosure_commitment.starts_with("φtrait_") || disclosure_commitment.len() > 128 {
+        return Err("disclosure commitment must be a valid phi trait commitment".to_string());
+    }
     let subject_did = required_field(&fields, "subject_did")?;
     let participant_did = required_field(&fields, "participant_did")?;
     let witness_did = fields.get("witness_did").filter(|value| !value.is_empty());
@@ -321,6 +326,11 @@ fn commit_group_exchange(body: &str, state: &ConsoleState) -> Result<String, Str
                 previous.amount
             ));
         }
+        if previous.disclosure_commitment != disclosure_commitment {
+            return Err(
+                "disclosure commitment must remain unchanged across group hops".to_string(),
+            );
+        }
     }
 
     let mut records = vec![DidKeyRecord::new(
@@ -353,8 +363,24 @@ fn commit_group_exchange(body: &str, state: &ConsoleState) -> Result<String, Str
             .map(|group| group.participant_amount_token.as_str()),
     )
     .map_err(|error| error.to_string())?;
-    let amount_tokens = amount_tokens_for_records(&records, amount, &amount_group)
+    let hop = previous
+        .as_ref()
+        .map_or(0, |group| group.hop.saturating_add(1));
+    if hop > max_depth {
+        return Err(format!(
+            "group hop {hop} exceeds exponent-derived maximum depth {max_depth}"
+        ));
+    }
+    let base_amount_tokens = amount_tokens_for_records(&records, amount, &amount_group)
         .map_err(|error| error.to_string())?;
+    let amount_tokens = bind_amount_tokens_to_disclosure(
+        &base_amount_tokens,
+        disclosure_commitment,
+        group_id,
+        hop,
+        max_depth,
+    )
+    .map_err(|error| error.to_string())?;
     let keys = state
         .signing_keys
         .lock()
@@ -389,17 +415,52 @@ fn commit_group_exchange(body: &str, state: &ConsoleState) -> Result<String, Str
         .unwrap_or_else(|| "null".to_string());
     let participant_role_signature = role_signature(DidRole::Participant)
         .ok_or_else(|| "participant role signature is missing".to_string())?;
-    let authority_challenge = degree_three_phi_token_authority_challenge(&degree_three_phi_token);
+    let authority_challenge = degree_three_phi_token_authority_challenge_with_disclosure(
+        &degree_three_phi_token,
+        Some(disclosure_commitment),
+        Some(group_id),
+        Some(hop),
+        Some(max_depth),
+    );
     let authority_signature =
         state
             .authority_key
             .sign(authority_challenge.as_bytes(), BLS_SIGNATURE_DST, &[]);
-    let hop = previous.map_or(0, |group| group.hop.saturating_add(1));
-    if hop > max_depth {
-        return Err(format!(
-            "group hop {hop} exceeds exponent-derived maximum depth {max_depth}"
-        ));
-    }
+    let submissions = records
+        .iter()
+        .map(|record| {
+            DidKeySubmission::with_role(record.did_key.clone(), record.role, record.proof.clone())
+        })
+        .collect();
+    let (block_index, block_hash) = {
+        let mut blockchain = state
+            .blockchain
+            .lock()
+            .map_err(|_| "blockchain lock was poisoned".to_string())?;
+        blockchain
+            .add_public_key_block_with_disclosure(
+                submissions,
+                amount,
+                degree_three_phi_token.clone(),
+                disclosure_commitment,
+                group_id,
+                hop,
+                max_depth,
+                previous
+                    .as_ref()
+                    .map(|group| group.current_holder_did.as_str()),
+                previous.as_ref().map(|group| group.amount),
+                previous
+                    .as_ref()
+                    .map(|group| group.participant_amount_token.as_str()),
+            )
+            .map_err(|error| error.to_string())?;
+        let block = blockchain
+            .chain
+            .last()
+            .ok_or_else(|| "accepted disclosure block is missing".to_string())?;
+        (block.index, block.hash.clone())
+    };
     let witness_did_json = witness_did
         .map(|did| format!(r#""{}""#, json_escape(did)))
         .unwrap_or_else(|| "null".to_string());
@@ -407,17 +468,21 @@ fn commit_group_exchange(body: &str, state: &ConsoleState) -> Result<String, Str
         .map(|_| format!(r#""{}""#, json_escape(&amount_tokens.witness)))
         .unwrap_or_else(|| "null".to_string());
     let receipt_json = format!(
-        r#"{{"groupId":"{}","amount":{},"maxDepth":{},"hop":{},"amountTokenGroup":"{}","subjectAmountToken":"{}","subjectRoleSignature":"{}","witnessDid":{},"witnessAmountToken":{},"witnessRoleSignature":{},"participantAmountToken":"{}","participantRoleSignature":"{}","degreeThreePhiToken":"{}","authorityDid":"{}","authorityChallenge":"{}","authoritySignature":"{}"}}"#,
+        r#"{{"groupId":"{}","amount":{},"maxDepth":{},"hop":{},"disclosureCommitment":"{}","blockIndex":{},"blockHash":"{}","amountTokenGroup":"{}","subjectAmountToken":"{}","subjectRoleSignature":"{}","witnessDid":{},"witnessAmountToken":{},"witnessRoleSignature":{},"participantBaseAmountToken":"{}","participantAmountToken":"{}","participantRoleSignature":"{}","degreeThreePhiToken":"{}","authorityDid":"{}","authorityChallenge":"{}","authoritySignature":"{}"}}"#,
         json_escape(group_id),
         amount,
         max_depth,
         hop,
+        json_escape(disclosure_commitment),
+        block_index,
+        json_escape(&block_hash),
         json_escape(&amount_group),
         json_escape(&amount_tokens.subject),
         json_escape(subject_role_signature),
         witness_did_json,
         witness_amount_token_json,
         witness_role_signature_json,
+        json_escape(&base_amount_tokens.participant),
         json_escape(&amount_tokens.participant),
         json_escape(participant_role_signature),
         json_escape(&degree_three_phi_token),
@@ -429,8 +494,9 @@ fn commit_group_exchange(body: &str, state: &ConsoleState) -> Result<String, Str
         group_id.to_string(),
         InformationGroupState {
             amount,
+            disclosure_commitment: disclosure_commitment.to_string(),
             current_holder_did: participant_did.to_string(),
-            participant_amount_token: amount_tokens.participant.clone(),
+            participant_amount_token: base_amount_tokens.participant,
             hop,
             last_exchange_id: exchange_id.to_string(),
             receipt_json: receipt_json.clone(),
@@ -451,6 +517,14 @@ fn group_max_depth(amount: u8) -> Result<u8, String> {
 fn verify_group_receipt(body: &str) -> Result<String, String> {
     let fields = parse_form(body);
     let degree_three_phi_token = required_field(&fields, "degree_three_phi_token")?;
+    let disclosure_commitment = required_field(&fields, "disclosure_commitment")?;
+    let group_id = required_field(&fields, "group_id")?;
+    let hop = required_field(&fields, "hop")?
+        .parse::<u8>()
+        .map_err(|_| "receipt hop must be an integer".to_string())?;
+    let max_depth = required_field(&fields, "max_depth")?
+        .parse::<u8>()
+        .map_err(|_| "receipt max depth must be an integer".to_string())?;
     let authority_did = required_field(&fields, "authority_did")?;
     let authority_challenge = required_field(&fields, "authority_challenge")?;
     let authority_signature = required_field(&fields, "authority_signature")?;
@@ -479,7 +553,13 @@ fn verify_group_receipt(body: &str) -> Result<String, String> {
     if recomputed != degree_three_phi_token {
         return Err("role signatures do not aggregate to the receipt phi token".to_string());
     }
-    let expected_challenge = degree_three_phi_token_authority_challenge(degree_three_phi_token);
+    let expected_challenge = degree_three_phi_token_authority_challenge_with_disclosure(
+        degree_three_phi_token,
+        Some(disclosure_commitment),
+        Some(group_id),
+        Some(hop),
+        Some(max_depth),
+    );
     if authority_challenge != expected_challenge {
         return Err("authority challenge does not bind the receipt phi token".to_string());
     }
@@ -726,7 +806,7 @@ mod tests {
         };
         let first = commit_group_exchange(
             &format!(
-                "exchange_id=first&group_id=traits&amount=2&subject_did={}&participant_did={}&witness_did={}&witness_approval_payload={}&witness_approval_signature={}",
+                "exchange_id=first&group_id=traits&disclosure_commitment=%CF%86trait_00112233445566778899aabbccddeeff00112233&amount=2&subject_did={}&participant_did={}&witness_did={}&witness_approval_payload={}&witness_approval_signature={}",
                 dids[0],
                 dids[1],
                 dids[2],
@@ -736,6 +816,13 @@ mod tests {
             &state,
         )
         .unwrap();
+        assert!(first.contains(
+            r#""disclosureCommitment":"φtrait_00112233445566778899aabbccddeeff00112233""#
+        ));
+        assert!(first.contains("phi-amount-token-v2"));
+        assert!(first.contains("hop=0"));
+        assert!(first.contains("scaled_commitment=00112233445566778899aabbccddeeff00112233"));
+        assert_eq!(state.blockchain.lock().unwrap().chain.len(), 2);
         assert_eq!(
             json_string_field(&first, "witnessDid"),
             Some(dids[2].as_str())
@@ -775,7 +862,7 @@ mod tests {
         )
         .unwrap();
         let verified_receipt = verify_group_receipt(&format!(
-            "degree_three_phi_token={}&subject_signature={}&witness_signature={}&participant_signature={}&authority_did={}&authority_challenge={}&authority_signature={}",
+            "degree_three_phi_token={}&disclosure_commitment=%CF%86trait_00112233445566778899aabbccddeeff00112233&group_id=traits&hop=0&max_depth=1&subject_signature={}&witness_signature={}&participant_signature={}&authority_did={}&authority_challenge={}&authority_signature={}",
             json_string_field(&first, "degreeThreePhiToken").unwrap(),
             json_string_field(&first, "subjectRoleSignature").unwrap(),
             json_string_field(&first, "witnessRoleSignature").unwrap(),
@@ -788,7 +875,7 @@ mod tests {
         assert_eq!(verified_receipt, r#"{"valid":true}"#);
         let missing_approval = commit_group_exchange(
             &format!(
-                "exchange_id=unsigned-witness&group_id=unsigned-witness&amount=1&subject_did={}&participant_did={}&witness_did={}",
+                "exchange_id=unsigned-witness&group_id=unsigned-witness&disclosure_commitment=%CF%86trait_00112233445566778899aabbccddeeff00112233&amount=1&subject_did={}&participant_did={}&witness_did={}",
                 dids[0], dids[1], dids[2]
             ),
             &state,
@@ -798,23 +885,54 @@ mod tests {
                 .unwrap_err()
                 .contains("missing witness_approval_payload")
         );
-        let first_participant_token = json_string_field(&first, "participantAmountToken").unwrap();
+        let first_participant_token =
+            json_string_field(&first, "participantBaseAmountToken").unwrap();
         let second = commit_group_exchange(
             &format!(
-                "exchange_id=second&group_id=traits&amount=2&subject_did={}&participant_did={}",
+                "exchange_id=second&group_id=traits&disclosure_commitment=%CF%86trait_00112233445566778899aabbccddeeff00112233&amount=2&subject_did={}&participant_did={}",
                 dids[1], dids[2]
             ),
             &state,
         )
         .unwrap();
         assert!(second.contains(r#""hop":1"#));
+        assert!(second.contains("scaled_commitment=0022446688aaccef1133557799bbddfe00224466"));
         assert_eq!(
             json_string_field(&second, "amountTokenGroup").unwrap(),
             first_participant_token
         );
+        assert_eq!(state.blockchain.lock().unwrap().chain.len(), 3);
+        assert!(state.blockchain.lock().unwrap().is_valid());
+        {
+            let mut blockchain = state.blockchain.lock().unwrap();
+            let block::BlockData::PublicKeys(receipt) =
+                &mut blockchain.chain.last_mut().unwrap().data
+            else {
+                panic!("latest block should contain a disclosure receipt");
+            };
+            receipt.disclosure_hop = Some(0);
+            assert!(
+                receipt
+                    .verify_mining_proof(&state.authority_did_key)
+                    .is_err()
+            );
+            receipt.disclosure_hop = Some(1);
+        }
+        let wrong_commitment = commit_group_exchange(
+            &format!(
+                "exchange_id=wrong-commitment&group_id=traits&disclosure_commitment=%CF%86trait_ffeeddccbbaa99887766554433221100ffeeddcc&amount=2&subject_did={}&participant_did={}",
+                dids[2], dids[0]
+            ),
+            &state,
+        );
+        assert!(
+            wrong_commitment
+                .unwrap_err()
+                .contains("disclosure commitment must remain unchanged")
+        );
         let too_deep = commit_group_exchange(
             &format!(
-                "exchange_id=too-deep&group_id=traits&amount=2&subject_did={}&participant_did={}",
+                "exchange_id=too-deep&group_id=traits&disclosure_commitment=%CF%86trait_00112233445566778899aabbccddeeff00112233&amount=2&subject_did={}&participant_did={}",
                 dids[2], dids[0]
             ),
             &state,
@@ -826,7 +944,7 @@ mod tests {
         );
         let wrong_amount = commit_group_exchange(
             &format!(
-                "exchange_id=third&group_id=traits&amount=1&subject_did={}&participant_did={}",
+                "exchange_id=third&group_id=traits&disclosure_commitment=%CF%86trait_00112233445566778899aabbccddeeff00112233&amount=1&subject_did={}&participant_did={}",
                 dids[2], dids[0]
             ),
             &state,

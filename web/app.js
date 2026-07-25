@@ -715,6 +715,7 @@ function openReceiptInspector(id, revealedKeys = null, results = null) {
         })
         .join("")}</div>
       <div class="field"><label>Disclosure commitment</label><div class="contract">${escapeHtml(exchange.disclosureCommitment)}</div></div>
+      ${receipt.blockHash ? `<div class="field"><label>On-chain block</label><div class="contract">#${receipt.blockIndex} · ${escapeHtml(receipt.blockHash)}</div></div>` : ""}
       <div class="form-actions"><button class="button" data-action="hide-receipt-parties" data-id="${exchange.id}">Hide all</button><button class="button secondary" data-action="apply-party-reveal" data-id="${exchange.id}">Reveal & verify selected</button><button class="button primary" data-action="verify-receipt-parties" data-id="${exchange.id}">Verify revealed</button></div>
     </div>`,
   );
@@ -726,7 +727,10 @@ async function verifyReceiptParties(exchange) {
     did && payload && signature
       ? verifyExchangeSignature(did, payload, signature).catch(() => false)
       : Promise.resolve(false);
-  const aggregateValid = await verifyGroupReceiptAggregate(receipt).catch(() => false);
+  const aggregateValid = await verifyGroupReceiptAggregate(
+    receipt,
+    exchange.disclosureCommitment,
+  ).catch(() => false);
   const results = {
     sender: {
       approval: await verify(exchange.sourceDid, exchange.payload, exchange.senderSignature),
@@ -785,7 +789,10 @@ async function verifyReceiptParties(exchange) {
 
 async function verifyCandidateParty(exchange, party, candidateDid) {
   const receipt = exchange.groupReceipt || {};
-  const aggregateReceipt = await verifyGroupReceiptAggregate(receipt).catch(() => false);
+  const aggregateReceipt = await verifyGroupReceiptAggregate(
+    receipt,
+    exchange.disclosureCommitment,
+  ).catch(() => false);
   if (party === "sender") {
     return {
       approval: await verifyExchangeSignature(
@@ -980,6 +987,7 @@ async function commitGroupAmountExchange(exchange) {
       exchange_id: exchange.id,
       group_id: exchange.groupId,
       amount: String(exchange.groupAmount),
+      disclosure_commitment: exchange.disclosureCommitment,
       subject_did: exchange.sourceDid,
       participant_did: exchange.targetDid,
       ...(exchange.witnessDid ? { witness_did: exchange.witnessDid } : {}),
@@ -996,13 +1004,17 @@ async function commitGroupAmountExchange(exchange) {
   return result;
 }
 
-async function verifyGroupReceiptAggregate(receipt) {
+async function verifyGroupReceiptAggregate(receipt, disclosureCommitment) {
   if (!receipt?.degreeThreePhiToken) return false;
   const response = await fetch("/api/group-exchange/verify-receipt", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       degree_three_phi_token: receipt.degreeThreePhiToken,
+      disclosure_commitment: disclosureCommitment,
+      group_id: receipt.groupId || "",
+      hop: String(receipt.hop ?? ""),
+      max_depth: String(receipt.maxDepth ?? ""),
       subject_signature: receipt.subjectRoleSignature || "",
       witness_signature: receipt.witnessRoleSignature || "",
       participant_signature: receipt.participantRoleSignature || "",

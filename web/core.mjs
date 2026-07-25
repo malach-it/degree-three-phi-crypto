@@ -426,9 +426,16 @@ export function exchangeValidity(exchange, now = new Date()) {
   if (
     Number(exchange.groupReceipt.amount) !== Number(exchange.groupAmount) ||
     Number(exchange.groupReceipt.maxDepth) !== derivedMaxDepth ||
-    Number(exchange.groupReceipt.hop) !== Number(exchange.depth)
+    Number(exchange.groupReceipt.hop) !== Number(exchange.depth) ||
+    exchange.groupReceipt.disclosureCommitment !== exchange.disclosureCommitment
   ) {
     return { valid: false, reason: "Group amount receipt mismatch" };
+  }
+  if (
+    !Number.isInteger(Number(exchange.groupReceipt.blockIndex)) ||
+    !exchange.groupReceipt.blockHash
+  ) {
+    return { valid: false, reason: "On-chain block reference missing" };
   }
   if (
     (exchange.witnessDid || null) !==

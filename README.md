@@ -15,7 +15,12 @@ Exchanges create tamper-evident trait commitments and require sender and
 recipient BLS signatures. An optional witness can explicitly approve and sign
 the transaction. Receipts support expiry, revocation, selective party reveal,
 candidate-DID verification, and bounded redisclosure using
-`group_amount = 2^max_depth`.
+`group_amount = 2^max_depth`. Each role's amount-token challenge and the mined
+block bind the disclosure commitment. The signed disclosure value evolves by
+hop as `binary(commitment) * 2^hop`; the base group token remains separate for
+algebraic custody chaining. Chain validation requires every disclosure group to
+start at hop 0 and advance one hop at a time without changing its commitment or
+maximum depth.
 
 Run it with:
 
