@@ -8,6 +8,8 @@ The local-first console manages privacy-scoped DIDs, hierarchical roles, owned
 identity information, and consented information exchanges. It keeps information
 ownership separate from the person described, so receiving a claim about
 another subject does not make that claim the recipient's own trait.
+Private values use AES-GCM encryption, verified values carry an owner BLS
+signature, and public values remain cleartext.
 
 Exchanges create tamper-evident trait commitments and require sender and
 recipient BLS signatures. An optional witness can explicitly approve and sign

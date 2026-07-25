@@ -2,14 +2,18 @@ import {
   ROLE_LEVELS,
   createForwardExchange,
   createTraitExchange,
+  decryptPrivateValue,
   demoState,
   derivePrivateDid,
   emptyState,
+  encryptPrivateValue,
   exchangeValidity,
   informationHoldingsFor,
   phiHash,
   recipientAcceptancePayload,
   roleContract,
+  traitCommitment,
+  traitVerificationPayload,
   uid,
   witnessApprovalPayload,
 } from "./core.mjs";
@@ -29,6 +33,138 @@ let currentPage = location.hash.slice(1) || "overview";
 let pendingUndo = null;
 const receiptVerificationResults = new Map();
 const receiptRevealedParties = new Map();
+const privateValueCache = new Map();
+const ENCRYPTION_DB = "phi.identity.encryption.v1";
+
+function privateValueKey(trait) {
+  return `${trait.id}:${trait.encryptedValue?.ciphertext || ""}`;
+}
+
+function displayTraitValue(trait) {
+  if (trait.classification !== "private") return trait.value ?? "";
+  return privateValueCache.get(privateValueKey(trait)) || "•••• encrypted";
+}
+
+function classificationLabel(trait) {
+  if (trait.classification === "private") return "private · AES-GCM encrypted";
+  if (trait.classification === "verified") return "verified · BLS signed";
+  return "public · cleartext";
+}
+
+function openEncryptionDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(ENCRYPTION_DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("keys");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function workspaceEncryptionKey() {
+  const database = await openEncryptionDatabase();
+  const existing = await new Promise((resolve, reject) => {
+    const request = database.transaction("keys").objectStore("keys").get("workspace");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  if (existing) {
+    database.close();
+    return existing;
+  }
+  const key = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction("keys", "readwrite");
+    transaction.objectStore("keys").put(key, "workspace");
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+  return key;
+}
+
+async function protectTrait(trait, ownerDid, allowVerifiedDowngrade = true) {
+  if (trait.classification === "private") {
+    const key = await workspaceEncryptionKey();
+    if (trait.value != null) {
+      const plaintext = String(trait.value);
+      trait.encryptedValue = await encryptPrivateValue(plaintext, key);
+      trait.value = null;
+      privateValueCache.set(privateValueKey(trait), plaintext);
+      return true;
+    }
+    if (trait.encryptedValue) {
+      const plaintext = await decryptPrivateValue(trait.encryptedValue, key);
+      privateValueCache.set(privateValueKey(trait), plaintext);
+    }
+    return false;
+  }
+  if (trait.classification === "verified") {
+    const payload = traitVerificationPayload(ownerDid, trait);
+    if (
+      trait.verification?.did === ownerDid &&
+      trait.verification.payload === payload &&
+      trait.verification.signature
+    ) {
+      try {
+        if (
+          await verifyExchangeSignature(
+            ownerDid,
+            payload,
+            trait.verification.signature,
+          )
+        ) {
+          return false;
+        }
+      } catch {
+        // Attempt to replace an unverifiable legacy signature below.
+      }
+    }
+    try {
+      const signature = await signExchangePayload(ownerDid, payload);
+      if (!(await verifyExchangeSignature(ownerDid, payload, signature))) {
+        throw new Error("Trait signature verification failed.");
+      }
+      trait.verification = { did: ownerDid, payload, signature };
+    } catch {
+      if (!allowVerifiedDowngrade) {
+        throw new Error("Verified information requires the owner's active BLS signing key.");
+      }
+      trait.classification = "public";
+      trait.verification = null;
+    }
+    return true;
+  }
+  return false;
+}
+
+async function initializeClassifiedInformation() {
+  let changed = false;
+  for (const identity of state.identities) {
+    for (const trait of identity.traits || []) {
+      changed = (await protectTrait(trait, identity.did)) || changed;
+    }
+  }
+  for (const exchange of state.exchanges) {
+    let receiptChanged = false;
+    for (const trait of exchange.disclosures || []) {
+      const signingDid = trait.verification?.did || exchange.sourceDid;
+      receiptChanged = (await protectTrait(trait, signingDid)) || receiptChanged;
+    }
+    if (receiptChanged) {
+      exchange.disclosureCommitment = traitCommitment(exchange.disclosures);
+      exchange.status = "revoked";
+      exchange.revokedAt ||= new Date().toISOString();
+      exchange.signaturesVerified = false;
+      exchange.migrationReason = "Classification protection upgraded";
+      changed = true;
+    }
+  }
+  if (changed) save();
+}
 
 function loadState() {
   try {
@@ -269,7 +405,7 @@ function renderAdministration() {
           ? `<form id="trait-form" class="form-grid">
             <div class="field-pair"><div class="field"><label>Information owner</label><select name="ownerId" required>${state.identities.map((identity) => `<option value="${identity.id}">${escapeHtml(identity.name)}</option>`).join("")}</select></div><div class="field"><label>Information subject</label><select name="subjectId" required>${state.identities.map((identity) => `<option value="${identity.id}">${escapeHtml(identity.name)}</option>`).join("")}</select></div></div>
             <div class="field-pair"><div class="field"><label>Information type</label><input name="name" required maxlength="40" placeholder="e.g. Jurisdiction" /></div><div class="field"><label>Value</label><input name="value" required maxlength="80" placeholder="e.g. EU" /></div></div>
-            <div class="field"><label>Classification</label><select name="classification"><option value="private">Private</option><option value="verified">Verified</option><option value="public">Public</option></select></div>
+            <div class="field"><label>Protection</label><select name="classification"><option value="private">Private · AES-GCM encrypted</option><option value="verified">Verified · BLS signed</option><option value="public">Public · cleartext</option></select><small class="helper">Private values are encrypted before persistence. Verified values require the owner's signing key.</small></div>
             <button class="button secondary">Add owned information</button>
           </form>`
           : `<div class="empty"><div><div class="empty-mark">φ</div><h3>No subjects</h3><p>Create an identity before adding traits.</p><button class="button primary" data-action="new-identity">Create subject</button></div></div>`
@@ -281,7 +417,7 @@ function renderAdministration() {
                 (identity) => `<div class="trait-subject"><div class="identity-main"><span class="identity-avatar">${initials(identity.name)}</span><span><strong>${escapeHtml(identity.name)}</strong><small>Owns ${identity.traits.length} information item${identity.traits.length === 1 ? "" : "s"}</small></span></div>
                 <div class="trait-list">${identity.traits
                   .map(
-                    (trait) => `<div class="trait-record"><span><strong>${escapeHtml(trait.name)}</strong><small>${escapeHtml(trait.value)} · about ${escapeHtml(identityById(trait.subjectId)?.name || "Unknown subject")} · ${escapeHtml(trait.classification)}</small></span><button class="more" data-action="delete-trait" data-id="${identity.id}" data-trait-id="${trait.id}" aria-label="Delete information">×</button></div>`,
+                    (trait) => `<div class="trait-record"><span><strong>${escapeHtml(trait.name)}</strong><small>${escapeHtml(displayTraitValue(trait))} · about ${escapeHtml(identityById(trait.subjectId)?.name || "Unknown subject")} · ${escapeHtml(classificationLabel(trait))}</small></span><button class="more" data-action="delete-trait" data-id="${identity.id}" data-trait-id="${trait.id}" aria-label="Delete information">×</button></div>`,
                   )
                   .join("")}</div></div>`,
               )
@@ -331,7 +467,7 @@ function renderAdministration() {
                     const subject = identityById(holding.subjectId);
                     return `<div class="holding-card">
                       <div class="chain-card-header"><span class="role-pill">About ${escapeHtml(subject?.name || "Deleted subject")}</span><span class="status-pill ${holding.valid ? "" : "revoked"}">${holding.valid ? "owned · verified" : holding.validityReason}</span></div>
-                      <strong>${escapeHtml(holding.trait.name)}: ${escapeHtml(holding.trait.value)}</strong>
+                      <strong>${escapeHtml(holding.trait.name)}: ${escapeHtml(displayTraitValue(holding.trait))}</strong>
                       <small>${escapeHtml(holding.purpose)} · expires ${new Date(holding.expiresAt).toLocaleDateString()} · group hop ${holding.depth}</small>
                       <div class="signature">Receipt ${escapeHtml(holding.exchangeId)} · source ${escapeHtml(shortDid(holding.sourceDid || ""))}</div>
                       ${
@@ -362,7 +498,7 @@ function renderAdministration() {
             .map((exchange) => {
               const validity = exchangeValidity(exchange);
               return `<tr><td><strong>${escapeHtml(identityById(exchange.sourceId)?.name || "Deleted")}</strong> → <strong>${escapeHtml(identityById(exchange.targetId)?.name || "Deleted")}</strong>${exchange.witnessId ? `<br><span class="role-pill">Witness: ${escapeHtml(identityById(exchange.witnessId)?.name || "Deleted")}</span>` : ""}<br><small class="helper">${ago(exchange.createdAt)} · group hop ${exchange.depth || 0} · expires ${new Date(exchange.expiresAt).toLocaleDateString()}</small></td>
-                <td><div class="trait-chips">${exchange.disclosures.map((trait) => `<span class="trait-chip">${escapeHtml(trait.name)}: ${escapeHtml(trait.value)}</span>`).join("")}</div></td>
+                <td><div class="trait-chips">${exchange.disclosures.map((trait) => `<span class="trait-chip">${escapeHtml(trait.name)}: ${escapeHtml(displayTraitValue(trait))}</span>`).join("")}</div></td>
                 <td>${escapeHtml(exchange.purpose)}</td><td><span class="status-pill ${validity.valid ? "" : "revoked"}">${validity.valid ? "dual-signed" : validity.reason}</span></td>
                 <td><div class="receipt-signers"><span class="${exchange.senderSignature ? "signed" : ""}">S ${exchange.senderSignature ? "✓" : "—"}</span>${exchange.witnessDid ? `<span class="${exchange.witnessSignature ? "signed" : ""}">W ${exchange.witnessSignature ? "✓" : "—"}</span>` : ""}<span class="${exchange.recipientSignature ? "signed" : ""}">R ${exchange.recipientSignature ? "✓" : "—"}</span></div><small class="mono" title="${escapeHtml(exchange.recipientSignature || exchange.witnessSignature || exchange.senderSignature || "")}">${escapeHtml(shortDid(exchange.recipientSignature || exchange.witnessSignature || exchange.senderSignature || "unsigned"))}</small></td>
                 <td><div class="form-actions" style="margin:0"><button class="button compact" data-action="inspect-receipt" data-id="${exchange.id}">Inspect</button>${
@@ -443,7 +579,7 @@ function updateExchangeFields() {
     ? source.traits
         .map(
           (trait) =>
-            `<label><input type="checkbox" name="traitIds" value="${trait.id}" ${trait.subjectId === defaultSubjectId ? "checked" : ""} /><span><strong>${escapeHtml(trait.name)}</strong><small>${escapeHtml(trait.value)} · about ${escapeHtml(identityById(trait.subjectId)?.name || "Unknown subject")} · ${escapeHtml(trait.classification)}</small></span></label>`,
+            `<label><input type="checkbox" name="traitIds" value="${trait.id}" ${trait.subjectId === defaultSubjectId ? "checked" : ""} /><span><strong>${escapeHtml(trait.name)}</strong><small>${escapeHtml(displayTraitValue(trait))} · about ${escapeHtml(identityById(trait.subjectId)?.name || "Unknown subject")} · ${escapeHtml(classificationLabel(trait))}</small></span></label>`,
         )
         .join("")
     : `<span class="helper">This source has no owned information to disclose.</span>`;
@@ -462,7 +598,7 @@ function openIdentityDetails(id) {
     <div class="field"><label>Phi access contract</label><div class="contract">${escapeHtml(roleContract(identity))}</div></div>
     <div class="field"><label>Information this identity owns</label>${
       identity.traits.length
-        ? `<div class="holding-list">${identity.traits.map((trait) => `<div class="trait-record"><span><strong>About ${escapeHtml(identityById(trait.subjectId)?.name || "Unknown subject")}: ${escapeHtml(trait.name)} = ${escapeHtml(trait.value)}</strong><small>${escapeHtml(trait.classification)} · source registry</small></span><span class="status-pill">owned</span></div>`).join("")}</div>`
+        ? `<div class="holding-list">${identity.traits.map((trait) => `<div class="trait-record"><span><strong>About ${escapeHtml(identityById(trait.subjectId)?.name || "Unknown subject")}: ${escapeHtml(trait.name)} = ${escapeHtml(displayTraitValue(trait))}</strong><small>${escapeHtml(classificationLabel(trait))} · source registry</small></span><span class="status-pill">owned</span></div>`).join("")}</div>`
         : `<div class="notice">This identity has no source information in its ownership registry.</div>`
     }</div>
     <div class="field"><label>Owned information received from other subjects</label>${
@@ -470,7 +606,7 @@ function openIdentityDetails(id) {
         ? `<div class="holding-list">${holdings
             .map((holding) => {
               const subject = identityById(holding.subjectId);
-              return `<div class="trait-record"><span><strong>About ${escapeHtml(subject?.name || "Deleted subject")}: ${escapeHtml(holding.trait.name)} = ${escapeHtml(holding.trait.value)}</strong><small>${escapeHtml(holding.purpose)} · ${holding.valid ? "dual-signed holding" : holding.validityReason}</small></span><span class="status-pill ${holding.valid ? "" : "revoked"}">${holding.valid ? "owned" : "inactive"}</span></div>`;
+              return `<div class="trait-record"><span><strong>About ${escapeHtml(subject?.name || "Deleted subject")}: ${escapeHtml(holding.trait.name)} = ${escapeHtml(displayTraitValue(holding.trait))}</strong><small>${escapeHtml(classificationLabel(holding.trait))} · ${escapeHtml(holding.purpose)} · ${holding.valid ? "dual-signed holding" : holding.validityReason}</small></span><span class="status-pill ${holding.valid ? "" : "revoked"}">${holding.valid ? "owned" : "inactive"}</span></div>`;
             })
             .join("")}</div>`
         : `<div class="notice">This identity does not currently hold information received from another subject.</div>`
@@ -495,7 +631,7 @@ function openForwardExchange(parentId) {
     "Re-exchange owned information",
     `Continue group ${parent.groupId} from ${holder?.name || "holder"} to a new recipient.`,
     `<div class="privacy-callout"><strong>φ</strong><span>The claim remains about ${escapeHtml(subject?.name || "the original subject")}. The current holder becomes the group subject for this custody hop.</span></div>
-    <div class="trait-chips">${parent.disclosures.map((trait) => `<span class="trait-chip">${escapeHtml(trait.name)}: ${escapeHtml(trait.value)}</span>`).join("")}</div>
+    <div class="trait-chips">${parent.disclosures.map((trait) => `<span class="trait-chip">${escapeHtml(trait.name)}: ${escapeHtml(displayTraitValue(trait))}</span>`).join("")}</div>
     <form id="forward-exchange-form" class="form-grid" style="margin-top:14px">
       <input type="hidden" name="parentId" value="${parent.id}" />
       <div class="field"><label>Current holder</label><div class="contract">${escapeHtml(holder?.name || "")} · hop ${parent.depth || 0} of ${parent.maxDepth}</div></div>
@@ -1159,17 +1295,29 @@ document.addEventListener("submit", async (event) => {
     ) {
       return toast("This owner already holds that information type about the subject.");
     }
-    identity.traits.push({
+    const trait = {
       id: uid("trait"),
       name,
       value: data.get("value").trim(),
       classification: data.get("classification"),
       subjectId: subject.id,
       subjectDid: subject.did,
-    });
-    save();
-    render();
-    toast("Subject-owned information added.");
+    };
+    try {
+      await protectTrait(trait, identity.did, false);
+      identity.traits.push(trait);
+      save();
+      render();
+      toast(
+        trait.classification === "private"
+          ? "Private information encrypted and added."
+          : trait.classification === "verified"
+            ? "Verified information signed and added."
+            : "Public information added in cleartext.",
+      );
+    } catch (error) {
+      toast(error.message || "Information protection failed.");
+    }
   }
   if (form.id === "exchange-form") {
     const data = new FormData(form);
@@ -1284,5 +1432,10 @@ async function checkRuntime() {
   }
 }
 
+try {
+  await initializeClassifiedInformation();
+} catch (error) {
+  console.error("Information protection initialization failed.", error);
+}
 render();
 checkRuntime();

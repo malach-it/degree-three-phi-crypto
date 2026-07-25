@@ -81,6 +81,43 @@ export async function derivePrivateDid({ name, context, entropy }) {
   };
 }
 
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return globalThis.btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = globalThis.atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+export async function encryptPrivateValue(value, key) {
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await globalThis.crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(String(value)),
+  );
+  return {
+    algorithm: "AES-GCM",
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+  };
+}
+
+export async function decryptPrivateValue(encryptedValue, key) {
+  if (encryptedValue?.algorithm !== "AES-GCM") {
+    throw new Error("Unsupported private information encryption.");
+  }
+  const plaintext = await globalThis.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(encryptedValue.iv) },
+    key,
+    base64ToBytes(encryptedValue.ciphertext),
+  );
+  return new TextDecoder().decode(plaintext);
+}
+
 export function roleContract(identity) {
   const level = ROLE_LEVELS[identity.role] || 1;
   const inherited = Object.entries(ROLE_LEVELS)
@@ -91,16 +128,42 @@ export function roleContract(identity) {
 
 export function traitCommitment(traits = []) {
   const canonical = traits
-    .map(({ id, name, value, classification, subjectId, subjectDid }) => ({
+    .map(
+      ({
+        id,
+        name,
+        value,
+        encryptedValue,
+        verification,
+        classification,
+        subjectId,
+        subjectDid,
+      }) => ({
       id,
       name: String(name).trim(),
-      value: String(value).trim(),
+      value: value == null ? null : String(value).trim(),
+      encryptedValue: encryptedValue || null,
+      verification: verification || null,
       classification,
       subjectId: subjectId || null,
       subjectDid: subjectDid || null,
-    }))
+      }),
+    )
     .sort((left, right) => left.id.localeCompare(right.id));
   return `φtrait_${phiHash(JSON.stringify(canonical), 40)}`;
+}
+
+export function traitVerificationPayload(ownerDid, trait) {
+  return JSON.stringify({
+    protocol: "phi-trait-verification-v1",
+    ownerDid,
+    id: trait.id,
+    name: String(trait.name).trim(),
+    value: trait.value == null ? null : String(trait.value).trim(),
+    classification: trait.classification,
+    subjectId: trait.subjectId || null,
+    subjectDid: trait.subjectDid || null,
+  });
 }
 
 export function createTraitExchange({

@@ -3,13 +3,16 @@ import assert from "node:assert/strict";
 import {
   createForwardExchange,
   createTraitExchange,
+  decryptPrivateValue,
   derivePrivateDid,
+  encryptPrivateValue,
   exchangeValidity,
   groupAmountForDepth,
   informationHoldingsFor,
   maxDepthFromGroupAmount,
   recipientAcceptancePayload,
   traitCommitment,
+  traitVerificationPayload,
   witnessApprovalPayload,
 } from "./core.mjs";
 
@@ -34,6 +37,38 @@ test("group amount exponent deterministically encodes maximum depth", () => {
   assert.equal(groupAmountForDepth(6), 64);
   assert.equal(maxDepthFromGroupAmount(8), 3);
   assert.equal(maxDepthFromGroupAmount(3), null);
+});
+
+test("private information is encrypted with authenticated AES-GCM", async () => {
+  const key = await globalThis.crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  const encrypted = await encryptPrivateValue("EU", key);
+  assert.equal(encrypted.algorithm, "AES-GCM");
+  assert.notEqual(encrypted.ciphertext, "EU");
+  assert.equal(await decryptPrivateValue(encrypted, key), "EU");
+  await assert.rejects(
+    decryptPrivateValue({ ...encrypted, ciphertext: `${encrypted.ciphertext.slice(0, -2)}AA` }, key),
+  );
+});
+
+test("verified information has a canonical owner-signing payload", () => {
+  const trait = {
+    id: "jurisdiction",
+    name: "Jurisdiction",
+    value: "EU",
+    classification: "verified",
+    subjectId: "member",
+    subjectDid: identities[1].did,
+  };
+  const first = traitVerificationPayload(identities[0].did, trait);
+  assert.equal(first, traitVerificationPayload(identities[0].did, { ...trait }));
+  assert.notEqual(
+    first,
+    traitVerificationPayload(identities[0].did, { ...trait, value: "US" }),
+  );
 });
 
 test("trait commitments detect changes to an information snapshot", () => {
