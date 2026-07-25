@@ -9,7 +9,9 @@ import {
   emptyState,
   encryptPrivateValue,
   exchangeValidity,
+  identityWalletUrl,
   informationHoldingsFor,
+  pendingExchangeSignatureRole,
   phiHash,
   recipientAcceptancePayload,
   roleContract,
@@ -35,6 +37,7 @@ let pendingUndo = null;
 const receiptVerificationResults = new Map();
 const receiptRevealedParties = new Map();
 const privateValueCache = new Map();
+const walletPopups = new Map();
 const ENCRYPTION_DB = "phi.identity.encryption.v1";
 
 function privateValueKey(trait) {
@@ -267,7 +270,7 @@ function identityRow(identity) {
     </span></div>
     <span class="role-pill">L${ROLE_LEVELS[identity.role]} · ${identity.role}</span>
     <span class="status-pill">${identity.status}</span>
-    <button class="more" data-action="identity-menu" data-id="${identity.id}" aria-label="Identity actions">•••</button>
+    <div class="identity-actions"><a class="wallet-link" href="${identityWalletUrl(identity.id)}" data-action="open-wallet" data-id="${identity.id}" aria-label="Open ${escapeHtml(identity.name)} web wallet">↗</a><button class="more" data-action="identity-menu" data-id="${identity.id}" aria-label="Identity actions">•••</button></div>
   </div>`;
 }
 
@@ -369,15 +372,44 @@ function renderIdentities() {
   )}
   ${
     state.identities.length
-      ? `<section class="panel flush"><div class="table-wrap"><table><thead><tr><th>Identity</th><th>Role contract</th><th>Context</th><th>Authenticity</th><th></th></tr></thead><tbody>
+      ? `<section class="panel flush"><div class="table-wrap"><table><thead><tr><th>Identity</th><th>Role contract</th><th>Context</th><th>Authenticity</th><th>Wallet</th><th></th></tr></thead><tbody>
       ${state.identities
         .map((identity) => `<tr><td><div class="identity-main"><span class="identity-avatar">${initials(identity.name)}</span><span><strong>${escapeHtml(identity.name)}</strong><small>${escapeHtml(shortDid(identity.did))}</small></span></div></td>
           <td><span class="role-pill">L${ROLE_LEVELS[identity.role]} · ${identity.role}</span></td><td>${escapeHtml(identity.context)}</td>
           <td><span class="status-pill">${identity.did.startsWith("did:key") ? "BLS attested" : "Local derived"}</span></td>
+          <td><a class="button secondary compact" href="${identityWalletUrl(identity.id)}" data-action="open-wallet" data-id="${identity.id}">Open wallet</a></td>
           <td><button class="more" data-action="identity-menu" data-id="${identity.id}">•••</button></td></tr>`)
         .join("")}</tbody></table></div></section>`
       : emptyPanel("Your registry is empty", "Generate a context-specific DID. The same person can hold unlinkable identifiers for different scopes.", "new-identity", "Generate identity")
   }`;
+}
+
+function openWalletPopup(link) {
+  const width = Math.min(550, screen.availWidth - 40);
+  const height = Math.min(820, screen.availHeight - 40);
+  const left = 0;
+  const top = 0;
+  const identityId = link.dataset.id || "identity";
+  const previous = walletPopups.get(identityId);
+  if (previous && !previous.closed) previous.close();
+  const popup = window.open(
+    link.href,
+    "_blank",
+    `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`,
+  );
+  if (!popup) {
+    window.location.assign(link.href);
+    return;
+  }
+  walletPopups.set(identityId, popup);
+  try {
+    popup.moveTo(0, 0);
+    popup.resizeTo(width, height);
+  } catch {
+    // Some browsers or window managers do not allow scripted positioning.
+  }
+  popup.opener = null;
+  popup.focus();
 }
 
 function renderAdministration() {
@@ -446,7 +478,7 @@ function renderAdministration() {
             <div class="field"><label>Owned information to disclose</label><div id="exchange-traits" class="check-list"></div><small class="helper">Selected records are copied into the receipt and protected by its phi commitment.</small></div>
             <div class="field"><label>Purpose</label><input name="purpose" required maxlength="100" placeholder="e.g. Confirm eligibility for working group" /></div>
             <div class="field"><label>Disclosure expiry</label><input name="expiresAt" type="date" min="${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}" value="${defaultExpiry}" required /></div>
-            <label class="consent"><input name="consent" type="checkbox" required /> The source subject explicitly consents to this limited disclosure.</label>
+            <label class="consent"><input name="consent" type="checkbox" required /> I confirm these details and will send the source identity a wallet signature request.</label>
             <label class="consent"><input name="allowRedisclosure" type="checkbox" /> Grant the recipient permission to redisclose this information through the group amount chain.</label>
             <div class="field"><label>Maximum redisclosure depth</label><input name="maxDepth" type="number" min="1" max="6" value="1" /><small class="helper">Encoded as group amount 2^depth; ignored unless redisclosure is granted.</small></div>
             <button class="button primary">Exchange selected information</button>
@@ -503,16 +535,19 @@ function renderAdministration() {
             .reverse()
             .map((exchange) => {
               const validity = exchangeValidity(exchange);
+              const pendingRole = pendingExchangeSignatureRole(exchange);
               return `<tr><td><strong>${escapeHtml(identityById(exchange.sourceId)?.name || "Deleted")}</strong> → <strong>${escapeHtml(identityById(exchange.targetId)?.name || "Deleted")}</strong>${exchange.witnessId ? `<br><span class="role-pill">Witness: ${escapeHtml(identityById(exchange.witnessId)?.name || "Deleted")}</span>` : ""}<br><small class="helper">${ago(exchange.createdAt)} · group hop ${exchange.depth || 0} · expires ${new Date(exchange.expiresAt).toLocaleDateString()}</small></td>
                 <td><div class="trait-chips">${exchange.disclosures.map((trait) => `<span class="trait-chip">${escapeHtml(trait.name)}: ${escapeHtml(displayTraitValue(trait))}</span>`).join("")}</div></td>
                 <td>${escapeHtml(exchange.purpose)}</td><td><span class="status-pill ${validity.valid ? "" : "revoked"}">${validity.valid ? "dual-signed" : validity.reason}</span></td>
                 <td><div class="receipt-signers"><span class="${exchange.senderSignature ? "signed" : ""}">S ${exchange.senderSignature ? "✓" : "—"}</span>${exchange.witnessDid ? `<span class="${exchange.witnessSignature ? "signed" : ""}">W ${exchange.witnessSignature ? "✓" : "—"}</span>` : ""}<span class="${exchange.recipientSignature ? "signed" : ""}">R ${exchange.recipientSignature ? "✓" : "—"}</span></div><small class="mono" title="${escapeHtml(exchange.recipientSignature || exchange.witnessSignature || exchange.senderSignature || "")}">${escapeHtml(shortDid(exchange.recipientSignature || exchange.witnessSignature || exchange.senderSignature || "unsigned"))}</small></td>
                 <td>${renderAmountTokenSummary(exchange.groupReceipt)}</td>
                 <td><div class="form-actions" style="margin:0"><button class="button compact" data-action="inspect-receipt" data-id="${exchange.id}">Inspect</button>${
-                  exchange.status === "pending_witness"
-                    ? `<button class="button secondary compact" data-action="approve-witness" data-id="${exchange.id}">Witness & sign</button>`
-                    : exchange.status === "pending_recipient"
-                    ? `<button class="button primary compact" data-action="accept-exchange" data-id="${exchange.id}">Accept & co-sign</button>`
+                  pendingRole === "sender"
+                    ? `<a class="button secondary compact" href="${identityWalletUrl(exchange.sourceId, "sign")}" data-action="open-wallet" data-id="${exchange.sourceId}">Open sender wallet</a>`
+                    : pendingRole === "witness"
+                    ? `<a class="button secondary compact" href="${identityWalletUrl(exchange.witnessId, "sign")}" data-action="open-wallet" data-id="${exchange.witnessId}">Open witness wallet</a>`
+                    : pendingRole === "recipient"
+                    ? `<a class="button primary compact" href="${identityWalletUrl(exchange.targetId, "sign")}" data-action="open-wallet" data-id="${exchange.targetId}">Open recipient wallet</a>`
                     : exchange.status === "accepted"
                       ? `<button class="button danger compact" data-action="revoke-exchange" data-id="${exchange.id}">Revoke</button>`
                       : `<button class="button compact" data-action="restore-exchange" data-id="${exchange.id}">Restore</button>`
@@ -618,7 +653,7 @@ function openIdentityDetails(id) {
             .join("")}</div>`
         : `<div class="notice">This identity does not currently hold information received from another subject.</div>`
     }</div>
-    <div class="form-actions"><button class="button" data-action="copy-value" data-value="${escapeHtml(identity.did)}">Copy DID</button><button class="button danger" data-action="delete-identity" data-id="${identity.id}">Delete identity</button></div></div>`,
+    <div class="form-actions"><a class="button primary" href="${identityWalletUrl(identity.id)}" data-action="open-wallet" data-id="${identity.id}">Open web wallet</a><button class="button" data-action="copy-value" data-value="${escapeHtml(identity.did)}">Copy DID</button><button class="button danger" data-action="delete-identity" data-id="${identity.id}">Delete identity</button></div></div>`,
   );
 }
 
@@ -646,7 +681,7 @@ function openForwardExchange(parentId) {
       <div class="field"><label>Witness (optional)</label><select name="witnessId"><option value="">No witness</option>${state.identities.map((identity) => `<option value="${identity.id}">${escapeHtml(identity.name)} · ${identity.role}</option>`).join("")}</select><small class="helper">Signs a separate witness amount token for this hop.</small></div>
       <div class="field"><label>Redisclosure purpose</label><input name="purpose" required maxlength="100" placeholder="e.g. Verify downstream eligibility" /></div>
       <div class="field"><label>Expiry</label><input name="expiresAt" type="date" min="${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}" max="${latestExpiry}" value="${suggestedExpiry}" required /></div>
-      <label class="consent"><input name="consent" type="checkbox" required /> The current holder consents to this authorized redisclosure.</label>
+      <label class="consent"><input name="consent" type="checkbox" required /> I confirm these details and will send the current holder a wallet signature request.</label>
       <div class="form-actions"><button type="button" class="button" data-action="close-modal">Cancel</button><button class="button primary">Sender sign & continue group</button></div>
     </form>`,
   );
@@ -987,31 +1022,6 @@ async function verifyDualSignedExchange(exchange) {
   return results.every(Boolean);
 }
 
-async function commitGroupAmountExchange(exchange) {
-  const response = await fetch("/api/group-exchange/commit", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      exchange_id: exchange.id,
-      group_id: exchange.groupId,
-      amount: String(exchange.groupAmount),
-      disclosure_commitment: exchange.disclosureCommitment,
-      subject_did: exchange.sourceDid,
-      participant_did: exchange.targetDid,
-      ...(exchange.witnessDid ? { witness_did: exchange.witnessDid } : {}),
-      ...(exchange.witnessDid
-        ? {
-            witness_approval_payload: witnessApprovalPayload(exchange),
-            witness_approval_signature: exchange.witnessSignature,
-          }
-        : {}),
-    }),
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || "Group amount commitment failed.");
-  return result;
-}
-
 async function verifyGroupReceiptAggregate(receipt, disclosureCommitment) {
   if (!receipt?.degreeThreePhiToken) return false;
   const response = await fetch("/api/group-exchange/verify-receipt", {
@@ -1047,6 +1057,11 @@ document.addEventListener("click", async (event) => {
   }
   const action = target.dataset.action;
   if (action === "close-modal" && (target.dataset.modal !== undefined || !event.target.closest("[data-modal]") || target.classList.contains("close-button") || target.textContent === "Cancel")) closeModal();
+  if (action === "open-wallet") {
+    event.preventDefault();
+    closeModal();
+    openWalletPopup(target);
+  }
   if (action === "toggle-nav") document.body.classList.toggle("nav-open");
   if (action === "new-identity") openIdentityModal();
   if (action === "forward-exchange") openForwardExchange(target.dataset.id);
@@ -1187,72 +1202,17 @@ document.addEventListener("click", async (event) => {
       );
     }
   }
-  if (action === "approve-witness") {
-    const exchange = state.exchanges.find((item) => item.id === target.dataset.id);
-    if (exchange?.witnessDid) {
-      target.disabled = true;
-      target.textContent = "Witness signing…";
-      try {
-        exchange.witnessSignature = await signExchangePayload(
-          exchange.witnessDid,
-          witnessApprovalPayload(exchange),
-        );
-        exchange.witnessVerified = await verifyExchangeSignature(
-          exchange.witnessDid,
-          witnessApprovalPayload(exchange),
-          exchange.witnessSignature,
-        );
-        if (!exchange.witnessVerified) {
-          exchange.witnessSignature = null;
-          throw new Error("The witness approval signature could not be verified.");
-        }
-        exchange.status = "pending_recipient";
-        exchange.witnessedAt = new Date().toISOString();
-        save();
-        render();
-        toast("Witness explicitly approved and signed.");
-      } catch (error) {
-        render();
-        toast(error.message);
-      }
-    }
-  }
-  if (action === "accept-exchange") {
-    const exchange = state.exchanges.find((item) => item.id === target.dataset.id);
-    if (exchange) {
-      target.disabled = true;
-      target.textContent = "Signing…";
-      try {
-        exchange.recipientSignature = await signExchangePayload(
-          exchange.targetDid,
-          recipientAcceptancePayload(exchange),
-        );
-        exchange.signaturesVerified = await verifyDualSignedExchange(exchange);
-        if (!exchange.signaturesVerified) {
-          exchange.recipientSignature = null;
-          throw new Error("The dual signatures could not be verified.");
-        }
-        exchange.groupReceipt = await commitGroupAmountExchange(exchange);
-        exchange.status = "accepted";
-        exchange.acceptedAt = new Date().toISOString();
-        save();
-        render();
-        toast("Recipient accepted; both BLS signatures verified.");
-      } catch (error) {
-        render();
-        toast(error.message);
-      }
-    }
-  }
   if (action === "restore-exchange") {
     const exchange = state.exchanges.find((item) => item.id === target.dataset.id);
     if (exchange) {
       exchange.status =
         exchange.senderSignature && exchange.recipientSignature
           ? "accepted"
-          : exchange.witnessDid && !exchange.witnessSignature
-            ? "pending_witness"
-            : "pending_recipient";
+          : !exchange.senderSignature
+            ? "pending_sender"
+            : exchange.witnessDid && !exchange.witnessSignature
+              ? "pending_witness"
+              : "pending_recipient";
       exchange.revokedAt = null;
       save();
       render();
@@ -1360,21 +1320,10 @@ document.addEventListener("submit", async (event) => {
         allowRedisclosure: data.get("allowRedisclosure") === "on",
         maxDepth: data.get("maxDepth"),
       });
-      exchange.senderSignature = await signExchangePayload(source.did, exchange.payload);
-      const senderVerified = await verifyExchangeSignature(
-        source.did,
-        exchange.payload,
-        exchange.senderSignature,
-      );
-      if (!senderVerified) throw new Error("The sender BLS signature could not be verified.");
       state.exchanges.push(exchange);
       save();
       render();
-      toast(
-        exchange.witnessDid
-          ? "Sender signed. Awaiting explicit witness approval."
-          : "Sender signed. Awaiting recipient acceptance.",
-      );
+      toast("Exchange prepared. Open the sender wallet to consent and sign.");
     } catch (error) {
       toast(error.message);
     }
@@ -1398,22 +1347,11 @@ document.addEventListener("submit", async (event) => {
         expiresAt: new Date(`${data.get("expiresAt")}T23:59:59`).toISOString(),
         consent: data.get("consent") === "on",
       });
-      exchange.senderSignature = await signExchangePayload(source.did, exchange.payload);
-      const senderVerified = await verifyExchangeSignature(
-        source.did,
-        exchange.payload,
-        exchange.senderSignature,
-      );
-      if (!senderVerified) throw new Error("The holder BLS signature could not be verified.");
       state.exchanges.push(exchange);
       save();
       closeModal();
       render();
-      toast(
-        exchange.witnessDid
-          ? "Holder signed the next hop. Awaiting explicit witness approval."
-          : "Holder signed the next group hop. Awaiting recipient acceptance.",
-      );
+      toast("Redisclosure prepared. Open the holder wallet to consent and sign.");
     } catch (error) {
       toast(error.message);
     }
@@ -1422,6 +1360,13 @@ document.addEventListener("submit", async (event) => {
 
 window.addEventListener("hashchange", () => {
   currentPage = location.hash.slice(1) || "overview";
+  render();
+});
+
+window.addEventListener("storage", async (event) => {
+  if (event.key !== STORAGE_KEY) return;
+  state = loadState();
+  await hydratePrivateInformation();
   render();
 });
 

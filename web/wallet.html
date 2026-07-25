@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Standalone Phi identity wallet for information custody and disclosure amount tokens."
+    />
+    <title>Phi Web Wallet</title>
+    <link rel="stylesheet" href="/wallet.css" />
+  </head>
+  <body>
+    <header class="wallet-bar">
+      <a class="wallet-brand" href="/" aria-label="Return to Phi Identity Console">
+        <span>φ</span>
+        <div><strong>Phi Wallet</strong><small>Identity custody</small></div>
+      </a>
+      <div class="network-state">
+        <i></i>
+        <span id="network-state">Checking local chain…</span>
+      </div>
+      <a class="console-link" href="/#identities">Identity console ↗</a>
+    </header>
+    <main id="wallet-app" aria-live="polite"></main>
+    <div id="wallet-toast" class="wallet-toast" aria-live="assertive"></div>
+    <script type="module" src="/wallet.js"></script>
+  </body>
+</html>

@@ -9,11 +9,14 @@ import {
   encryptPrivateValue,
   exchangeValidity,
   groupAmountForDepth,
+  identityWalletUrl,
   informationHoldingsFor,
   maxDepthFromGroupAmount,
+  pendingExchangeSignatureRole,
   recipientAcceptancePayload,
   traitCommitment,
   traitVerificationPayload,
+  walletSignatureRequests,
   witnessApprovalPayload,
 } from "./core.mjs";
 
@@ -36,6 +39,62 @@ test("receipt amount token entries expose role and custody tokens", () => {
     ],
   );
   assert.deepEqual(amountTokenEntries(null), []);
+});
+
+test("identity wallet links preserve the selected identity", () => {
+  const url = identityWalletUrl("identity/member 1");
+  assert.equal(url, "/wallet?identity=identity%2Fmember+1");
+  assert.equal(new URL(url, "http://localhost").searchParams.get("identity"), "identity/member 1");
+  assert.equal(
+    identityWalletUrl("member", "sign"),
+    "/wallet?identity=member&view=sign",
+  );
+  assert.throws(() => identityWalletUrl(""), /required/i);
+});
+
+test("wallet signature requests include only the identity's pending role", () => {
+  const sender = {
+    id: "sender-request",
+    status: "pending_recipient",
+    sourceId: "wallet-owner",
+    targetId: "recipient",
+    senderSignature: null,
+  };
+  const witness = {
+    id: "witness-request",
+    status: "pending_witness",
+    senderSignature: "sender-signature",
+    witnessId: "wallet-owner",
+    witnessDid: "did:phi:witness",
+    targetId: "recipient",
+  };
+  const recipient = {
+    id: "recipient-request",
+    status: "pending_recipient",
+    senderSignature: "sender-signature",
+    witnessId: null,
+    targetId: "wallet-owner",
+  };
+  const accepted = {
+    id: "accepted",
+    status: "accepted",
+    targetId: "wallet-owner",
+  };
+
+  assert.deepEqual(
+    walletSignatureRequests("wallet-owner", [
+      sender,
+      witness,
+      recipient,
+      accepted,
+    ]).map(({ exchange, role }) => [exchange.id, role]),
+    [
+      ["sender-request", "sender"],
+      ["witness-request", "witness"],
+      ["recipient-request", "recipient"],
+    ],
+  );
+  assert.equal(pendingExchangeSignatureRole(sender), "sender");
 });
 
 const identities = [
@@ -160,7 +219,7 @@ test("trait exchange selectively discloses consented owned information", () => {
   assert.deepEqual(exchange.disclosures.map((trait) => trait.id), ["country"]);
   assert.equal(exchange.groupAmount, 4);
   assert.equal(maxDepthFromGroupAmount(exchange.groupAmount), 2);
-  assert.equal(exchange.status, "pending_witness");
+  assert.equal(exchange.status, "pending_sender");
   exchange.senderSignature = "sender-bls-signature";
   const witnessPayload = witnessApprovalPayload(exchange);
   assert.match(witnessPayload, /sender-bls-signature/);

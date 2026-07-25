@@ -207,6 +207,45 @@ export function amountTokenEntries(receipt = {}) {
   ].filter(({ token }) => typeof token === "string" && token.length > 0);
 }
 
+export function identityWalletUrl(identityId, view = null) {
+  const id = String(identityId || "").trim();
+  if (!id) throw new Error("Identity ID is required.");
+  const query = new URLSearchParams({ identity: id });
+  if (view) query.set("view", view);
+  return `/wallet?${query}`;
+}
+
+export function walletSignatureRequests(identityId, exchanges = []) {
+  return exchanges.flatMap((exchange) => {
+    const role = pendingExchangeSignatureRole(exchange);
+    if (role === "sender" && exchange.sourceId === identityId) {
+      return [{ exchange, role: "sender" }];
+    }
+    if (role === "witness" && exchange.witnessId === identityId) {
+      return [{ exchange, role: "witness" }];
+    }
+    if (role === "recipient" && exchange.targetId === identityId) {
+      return [{ exchange, role: "recipient" }];
+    }
+    return [];
+  });
+}
+
+export function pendingExchangeSignatureRole(exchange) {
+  if (!exchange || exchange.status === "accepted" || exchange.status === "revoked") {
+    return null;
+  }
+  if (!exchange.senderSignature) return "sender";
+  if (
+    exchange.witnessDid &&
+    (!exchange.witnessSignature || !exchange.witnessVerified)
+  ) {
+    return "witness";
+  }
+  if (!exchange.recipientSignature) return "recipient";
+  return null;
+}
+
 export function createTraitExchange({
   sourceId,
   targetId,
@@ -295,7 +334,7 @@ export function createTraitExchange({
     disclosureCommitment,
     purpose: purpose.trim(),
     expiresAt,
-    consentedAt: now,
+    consentedAt: null,
     createdAt: now,
     parentExchangeId: null,
     groupId: id,
@@ -305,7 +344,7 @@ export function createTraitExchange({
     allowRedisclosure: exchange.allowRedisclosure,
     maxDepth: depthLimit,
     payload: JSON.stringify(exchange),
-    status: witnessDid ? "pending_witness" : "pending_recipient",
+    status: "pending_sender",
     revokedAt: null,
     senderSignature: null,
     witnessSignature: null,
@@ -399,7 +438,7 @@ export function createForwardExchange({
     disclosureCommitment: parentExchange.disclosureCommitment,
     purpose: purpose.trim(),
     expiresAt,
-    consentedAt: now,
+    consentedAt: null,
     createdAt: now,
     parentExchangeId: parentExchange.id,
     groupId: parentExchange.groupId,
@@ -409,7 +448,7 @@ export function createForwardExchange({
     allowRedisclosure: parentExchange.allowRedisclosure,
     maxDepth: derivedMaxDepth,
     payload: JSON.stringify(payloadFields),
-    status: witnessDid ? "pending_witness" : "pending_recipient",
+    status: "pending_sender",
     revokedAt: null,
     senderSignature: null,
     witnessSignature: null,

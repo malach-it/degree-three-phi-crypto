@@ -29,8 +29,11 @@ use std::thread;
 const DEFAULT_ADDR: &str = "127.0.0.1:8790";
 const AUTHORITY_SEED: &[u8] = b"phi-identity-console-local-authority-v1";
 const INDEX_HTML: &str = include_str!("../../web/index.html");
+const WALLET_HTML: &str = include_str!("../../web/wallet.html");
 const STYLES_CSS: &str = include_str!("../../web/styles.css");
+const WALLET_CSS: &str = include_str!("../../web/wallet.css");
 const APP_JS: &str = include_str!("../../web/app.js");
+const WALLET_JS: &str = include_str!("../../web/wallet.js");
 const CORE_JS: &str = include_str!("../../web/core.mjs");
 
 struct ConsoleState {
@@ -107,12 +110,24 @@ fn handle_connection(stream: &mut TcpStream, state: &ConsoleState) -> Result<(),
         ("GET", "/") | ("GET", "/index.html") => {
             write_response(stream, "200 OK", "text/html; charset=utf-8", INDEX_HTML)
         }
+        ("GET", "/wallet") | ("GET", "/wallet.html") => {
+            write_response(stream, "200 OK", "text/html; charset=utf-8", WALLET_HTML)
+        }
         ("GET", "/styles.css") => {
             write_response(stream, "200 OK", "text/css; charset=utf-8", STYLES_CSS)
+        }
+        ("GET", "/wallet.css") => {
+            write_response(stream, "200 OK", "text/css; charset=utf-8", WALLET_CSS)
         }
         ("GET", "/app.js") => {
             write_response(stream, "200 OK", "text/javascript; charset=utf-8", APP_JS)
         }
+        ("GET", "/wallet.js") => write_response(
+            stream,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            WALLET_JS,
+        ),
         ("GET", "/core.mjs") => {
             write_response(stream, "200 OK", "text/javascript; charset=utf-8", CORE_JS)
         }
@@ -718,6 +733,13 @@ mod tests {
         let form = parse_form("name=Ada+Lovelace&context=R%26D");
         assert_eq!(form.get("name").unwrap(), "Ada Lovelace");
         assert_eq!(form.get("context").unwrap(), "R&D");
+    }
+
+    #[test]
+    fn wallet_endpoint_uses_a_standalone_entrypoint() {
+        assert!(WALLET_HTML.contains(r#"src="/wallet.js""#));
+        assert!(WALLET_HTML.contains(r#"href="/wallet.css""#));
+        assert!(!WALLET_HTML.contains("app-shell"));
     }
 
     #[test]
