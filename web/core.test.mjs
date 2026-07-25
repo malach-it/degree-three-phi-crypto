@@ -273,6 +273,7 @@ test("trait exchange selectively discloses consented owned information", () => {
   assert.equal(forwarded.depth, 1);
   assert.equal(forwarded.groupId, exchange.groupId);
   assert.equal(forwarded.groupAmount, exchange.groupAmount);
+  assert.equal(forwarded.status, "pending_sender");
   exchange.status = "revoked";
   assert.equal(
     exchangeValidity(exchange, new Date("2026-02-02T00:00:00.000Z")).valid,

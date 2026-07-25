@@ -1,8 +1,12 @@
 import {
   ROLE_LEVELS,
   amountTokenEntries,
+  createForwardExchange,
+  createTraitExchange,
   exchangeValidity,
+  identityWalletUrl,
   informationHoldingsFor,
+  maxDepthFromGroupAmount,
   recipientAcceptancePayload,
   walletSignatureRequests,
   witnessApprovalPayload,
@@ -13,7 +17,10 @@ const app = document.querySelector("#wallet-app");
 const toastRoot = document.querySelector("#wallet-toast");
 const walletQuery = new URLSearchParams(location.search);
 const identityId = walletQuery.get("identity");
-const activeView = walletQuery.get("view") === "sign" ? "sign" : "overview";
+const requestedView = walletQuery.get("view");
+const activeView = ["exchange", "sign"].includes(requestedView)
+  ? requestedView
+  : "overview";
 let state = loadWorkspace();
 
 function loadWorkspace() {
@@ -93,8 +100,100 @@ function walletNavigation(identity, requestCount) {
   const base = `/wallet?identity=${encodeURIComponent(identity.id)}`;
   return `<nav class="wallet-tabs" aria-label="Wallet pages">
     <a class="${activeView === "overview" ? "active" : ""}" href="${base}">Overview</a>
+    <a class="${activeView === "exchange" ? "active" : ""}" href="${base}&view=exchange">Exchange</a>
     <a class="${activeView === "sign" ? "active" : ""}" href="${base}&view=sign">Sign requests${requestCount ? `<span>${requestCount}</span>` : ""}</a>
   </nav>`;
+}
+
+function receivedGroupTipsFor(identity) {
+  const tips = new Map();
+  for (const exchange of state.exchanges) {
+    if (exchange.status !== "accepted" || !exchange.groupReceipt) continue;
+    const previous = tips.get(exchange.groupId);
+    if (!previous || Number(exchange.depth) >= Number(previous.depth)) {
+      tips.set(exchange.groupId, exchange);
+    }
+  }
+  return [...tips.values()].filter((exchange) => exchange.targetId === identity.id);
+}
+
+function exchangePage(identity) {
+  const recipients = state.identities.filter(({ id }) => id !== identity.id);
+  const defaultExpiry = new Date(Date.now() + 30 * 86400000)
+    .toISOString()
+    .slice(0, 10);
+  if (!recipients.length) {
+    return `<section class="wallet-empty exchange-empty"><span>⇄</span><h3>Exchange unavailable</h3><p>Add another identity to the workspace before initiating an exchange.</p><a href="/#identities">Open identity console</a></section>`;
+  }
+  const recipientOptions = recipients
+    .map(
+      (candidate) =>
+        `<option value="${escapeHtml(candidate.id)}">${escapeHtml(candidate.name)} · ${escapeHtml(candidate.role)}</option>`,
+    )
+    .join("");
+  const witnessOptions = `<option value="">No witness</option>${recipientOptions}`;
+  const receivedGroups = receivedGroupTipsFor(identity);
+  const registeredTraits = identity.traits || [];
+  const ownedInformationCount =
+    registeredTraits.length +
+    receivedGroups.reduce(
+      (count, exchange) => count + exchange.disclosures.length,
+      0,
+    );
+  const registeredInformation = registeredTraits.length
+    ? `<article class="received-group registered-group"><header><div><span class="tag">Registered here</span><h4>Directly owned information</h4><p>${registeredTraits.length} information item${registeredTraits.length === 1 ? "" : "s"} · creates a new amount-token group</p></div></header>
+      <form id="wallet-exchange-form" class="exchange-form">
+        <div class="exchange-field-pair"><label><span>Recipient identity</span><select name="targetId" required>${recipientOptions}</select></label><label><span>Witness (optional)</span><select name="witnessId">${witnessOptions}</select></label></div>
+        <fieldset><legend>Information to disclose</legend><div class="exchange-traits">${registeredTraits.map((trait, index) => `<label><input type="checkbox" name="traitIds" value="${escapeHtml(trait.id)}" ${index === 0 ? "checked" : ""} /><span><strong>${escapeHtml(trait.name)}: ${escapeHtml(traitValue(trait))}</strong><small>About ${escapeHtml(identityById(trait.subjectId)?.name || identity.name)} · ${escapeHtml(protectionLabel(trait))}</small></span></label>`).join("")}</div></fieldset>
+        <label><span>Exchange purpose</span><input name="purpose" required maxlength="100" placeholder="Why does the recipient need this information?" /></label>
+        <div class="exchange-field-pair"><label><span>Receipt expiry</span><input name="expiresAt" type="date" min="${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}" value="${defaultExpiry}" required /></label><label><span>Maximum redisclosure depth</span><input name="maxDepth" type="number" min="1" max="6" value="1" /></label></div>
+        <label class="sign-consent"><input name="allowRedisclosure" type="checkbox" /> <span>Allow the recipient to redisclose through the exponentiated group amount chain.</span></label>
+        <label class="sign-consent"><input name="confirmRequest" type="checkbox" required /> <span>I reviewed these request details and want to continue to sender consent.</span></label>
+        <footer><small>A new amount-token group is created after every required wallet signature is verified.</small><button>Continue to sign</button></footer>
+      </form>
+    </article>`
+    : "";
+  const receivedInformation = receivedGroups
+    .map((parent) => {
+      const validity = exchangeValidity(parent);
+      const maxDepth = maxDepthFromGroupAmount(parent.groupAmount) ?? 0;
+      const canForward =
+        validity.valid &&
+        parent.allowRedisclosure === true &&
+        Number(parent.depth) < maxDepth;
+      const blockedReason = !validity.valid
+        ? validity.reason
+        : !parent.allowRedisclosure
+          ? "Original subject did not permit redisclosure"
+          : `Maximum depth ${maxDepth} reached`;
+      const latestExpiry = new Date(parent.expiresAt)
+        .toISOString()
+        .slice(0, 10);
+      const suggestedExpiry = new Date(
+        Math.min(
+          new Date(parent.expiresAt).getTime(),
+          Date.now() + 14 * 86400000,
+        ),
+      )
+        .toISOString()
+        .slice(0, 10);
+      return `<article class="received-group ${canForward ? "" : "blocked"}"><header><div><span class="tag">Received · Group ${escapeHtml(parent.groupId)}</span><h4>About ${escapeHtml(identityById(parent.claimSubjectId || parent.sourceId)?.name || "original subject")}</h4><p>Hop ${parent.depth || 0} of ${maxDepth} · ${parent.disclosures.length} information item${parent.disclosures.length === 1 ? "" : "s"}</p></div></header><div class="exchange-traits">${parent.disclosures.map((trait) => `<label><span><strong>${escapeHtml(trait.name)}: ${escapeHtml(traitValue(trait))}</strong><small>${escapeHtml(protectionLabel(trait))}</small></span></label>`).join("")}</div>${
+        canForward
+          ? `<form class="exchange-form wallet-forward-form"><input type="hidden" name="parentId" value="${escapeHtml(parent.id)}" /><div class="exchange-field-pair"><label><span>New recipient</span><select name="targetId" required>${recipientOptions}</select></label><label><span>Witness (optional)</span><select name="witnessId">${witnessOptions}</select></label></div><label><span>Redisclosure purpose</span><input name="purpose" required maxlength="100" placeholder="Why should the next recipient receive this information?" /></label><label><span>Expiry</span><input name="expiresAt" type="date" min="${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}" max="${latestExpiry}" value="${suggestedExpiry}" required /></label><label class="sign-consent"><input name="confirmRequest" type="checkbox" required /> <span>I reviewed this continuation of the existing amount-token group.</span></label><footer><small>The original commitment, amount, subject, and depth limit remain unchanged.</small><button>Continue group</button></footer></form>`
+          : `<div class="group-blocked-reason">${escapeHtml(blockedReason)}</div>`
+      }</article>`;
+    })
+    .join("");
+  return `<section class="exchange-page">
+    <div class="signing-heading"><div class="signing-copy"><p>Wallet initiated</p><h2>Exchange owned information</h2><span>Registered records and received amount-token groups are held in one exchange inventory.</span></div><div class="signer-chip"><span>${initials(identity.name)}</span><div><strong>${escapeHtml(identity.name)}</strong><small>${escapeHtml(identity.did)}</small></div></div></div>
+    <section class="exchange-source"><header><div><h3>Owned information</h3><p>Select registered information or continue an authorized received group.</p></div><span>${ownedInformationCount}</span></header>
+      <div class="received-group-list">${
+        registeredInformation || receivedInformation
+          ? `${registeredInformation}${receivedInformation}`
+          : `<div class="wallet-empty">This wallet does not currently own information it can exchange.</div>`
+      }</div>
+    </section>
+  </section>`;
 }
 
 function signingPage(identity, requests) {
@@ -201,7 +300,11 @@ function render() {
     }
   </section>`;
   app.innerHTML = `${hero}${walletNavigation(identity, signatureRequests.length)}${
-    activeView === "sign" ? signingPage(identity, signatureRequests) : overview
+    activeView === "sign"
+      ? signingPage(identity, signatureRequests)
+      : activeView === "exchange"
+        ? exchangePage(identity)
+        : overview
   }`;
 }
 
@@ -321,6 +424,52 @@ function toast(message) {
   toastRoot.classList.add("visible");
   setTimeout(() => toastRoot.classList.remove("visible"), 1800);
 }
+
+document.addEventListener("submit", (event) => {
+  if (
+    event.target.id !== "wallet-exchange-form" &&
+    !event.target.classList.contains("wallet-forward-form")
+  ) {
+    return;
+  }
+  event.preventDefault();
+  const identity = identityById(identityId);
+  const data = new FormData(event.target);
+  const recipient = identityById(data.get("targetId"));
+  const witness = identityById(data.get("witnessId"));
+  try {
+    const shared = {
+      sourceId: identity.id,
+      targetId: recipient?.id,
+      sourceDid: identity.did,
+      targetDid: recipient?.did,
+      witnessId: witness?.id || null,
+      witnessDid: witness?.did || null,
+      purpose: data.get("purpose"),
+      expiresAt: new Date(`${data.get("expiresAt")}T23:59:59`).toISOString(),
+      consent: data.get("confirmRequest") === "on",
+    };
+    const exchange = event.target.classList.contains("wallet-forward-form")
+      ? createForwardExchange({
+          parentExchange: state.exchanges.find(
+            ({ id }) => id === data.get("parentId"),
+          ),
+          ...shared,
+        })
+      : createTraitExchange({
+          ...shared,
+          sourceTraits: identity.traits || [],
+          traitIds: data.getAll("traitIds"),
+          allowRedisclosure: data.get("allowRedisclosure") === "on",
+          maxDepth: data.get("maxDepth"),
+        });
+    state.exchanges.push(exchange);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    window.location.assign(identityWalletUrl(identity.id, "sign"));
+  } catch (error) {
+    toast(error.message);
+  }
+});
 
 document.addEventListener("click", async (event) => {
   const signButton = event.target.closest("[data-sign-exchange]");
