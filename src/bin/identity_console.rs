@@ -819,9 +819,11 @@ mod tests {
         assert!(first.contains(
             r#""disclosureCommitment":"φtrait_00112233445566778899aabbccddeeff00112233""#
         ));
-        assert!(first.contains("phi-amount-token-v2"));
-        assert!(first.contains("hop=0"));
-        assert!(first.contains("scaled_commitment=00112233445566778899aabbccddeeff00112233"));
+        assert!(
+            json_string_field(&first, "subjectAmountToken")
+                .unwrap()
+                .starts_with("did:key:z")
+        );
         assert_eq!(state.blockchain.lock().unwrap().chain.len(), 2);
         assert_eq!(
             json_string_field(&first, "witnessDid"),
@@ -896,7 +898,15 @@ mod tests {
         )
         .unwrap();
         assert!(second.contains(r#""hop":1"#));
-        assert!(second.contains("scaled_commitment=0022446688aaccef1133557799bbddfe00224466"));
+        assert!(
+            json_string_field(&second, "participantAmountToken")
+                .unwrap()
+                .starts_with("did:key:z")
+        );
+        assert_ne!(
+            json_string_field(&first, "participantAmountToken"),
+            json_string_field(&second, "participantAmountToken")
+        );
         assert_eq!(
             json_string_field(&second, "amountTokenGroup").unwrap(),
             first_participant_token

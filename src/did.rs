@@ -2,6 +2,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use blst::BLST_ERROR;
 use blst::min_pk::{AggregatePublicKey, AggregateSignature, PublicKey, SecretKey, Signature};
+use sha2::{Digest, Sha256};
 use std::array::TryFromSliceError;
 use std::error::Error;
 use std::fmt;
@@ -644,33 +645,20 @@ pub fn degree_three_phi_token_authority_challenge_with_disclosure(
     }
 }
 
-pub fn scaled_disclosure_commitment(
+fn disclosure_commitment_bytes(
     disclosure_commitment: &str,
-    hop: u8,
-) -> Result<String, OwnershipProofError> {
+) -> Result<Vec<u8>, OwnershipProofError> {
     let encoded = disclosure_commitment
         .strip_prefix("φtrait_")
         .filter(|value| !value.is_empty() && value.len().is_multiple_of(2))
         .ok_or(OwnershipProofError::InvalidDisclosureCommitment)?;
-    let mut bytes = (0..encoded.len())
+    (0..encoded.len())
         .step_by(2)
         .map(|index| {
             u8::from_str_radix(&encoded[index..index + 2], 16)
                 .map_err(|_| OwnershipProofError::InvalidDisclosureCommitment)
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    for _ in 0..hop {
-        let mut carry = 0u8;
-        for byte in bytes.iter_mut().rev() {
-            let next_carry = *byte >> 7;
-            *byte = (*byte << 1) | carry;
-            carry = next_carry;
-        }
-        if carry != 0 {
-            bytes.insert(0, carry);
-        }
-    }
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+        .collect()
 }
 
 pub fn bind_amount_token_to_disclosure(
@@ -681,11 +669,49 @@ pub fn bind_amount_token_to_disclosure(
     hop: u8,
     max_depth: u8,
 ) -> Result<String, OwnershipProofError> {
-    let scaled_commitment = scaled_disclosure_commitment(disclosure_commitment, hop)?;
-    Ok(format!(
-        "phi-amount-token-v2|group_id={group_id}|role={}|hop={hop}|max_depth={max_depth}|base_amount_token={base_amount_token}|scaled_commitment={scaled_commitment}",
-        role.as_str()
-    ))
+    if hop > max_depth || max_depth > MAX_AMOUNT.ilog2() as u8 {
+        return Err(OwnershipProofError::InvalidDisclosureCommitment);
+    }
+
+    let base_public_key = public_key_from_did_key(base_amount_token)?;
+    let disclosure_public_key =
+        disclosure_context_public_key(disclosure_commitment, group_id, role, max_depth)?;
+    let disclosure_multiplier = 1usize
+        .checked_shl(hop.into())
+        .ok_or(OwnershipProofError::InvalidDisclosureCommitment)?;
+    let mut public_keys = Vec::with_capacity(disclosure_multiplier + 1);
+    public_keys.push(&base_public_key);
+    public_keys.extend(std::iter::repeat_n(
+        &disclosure_public_key,
+        disclosure_multiplier,
+    ));
+
+    aggregate_public_keys(&public_keys)
+}
+
+fn disclosure_context_public_key(
+    disclosure_commitment: &str,
+    group_id: &str,
+    role: DidRole,
+    max_depth: u8,
+) -> Result<PublicKey, OwnershipProofError> {
+    let commitment = disclosure_commitment_bytes(disclosure_commitment)?;
+    let mut context = Sha256::new();
+    context.update(b"PHI_CRYPTO_DISCLOSURE_AMOUNT_TOKEN_V3");
+    context.update((group_id.len() as u64).to_be_bytes());
+    context.update(group_id.as_bytes());
+    context.update([match role {
+        DidRole::Subject => 0,
+        DidRole::Witness => 1,
+        DidRole::Participant => 2,
+    }]);
+    context.update([max_depth]);
+    context.update((commitment.len() as u64).to_be_bytes());
+    context.update(commitment);
+    let key = SecretKey::key_gen(&context.finalize(), &[])
+        .map_err(OwnershipProofError::InvalidAmountToken)?;
+
+    Ok(key.sk_to_pk())
 }
 
 pub fn bind_amount_tokens_to_disclosure(
@@ -831,4 +857,67 @@ fn public_key_from_did_key(did_key: &str) -> Result<PublicKey, OwnershipProofErr
     let public_key_bytes = bls12_381_public_key_from_did_key(did_key)?;
 
     PublicKey::uncompress(&public_key_bytes).map_err(OwnershipProofError::InvalidPublicKey)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DidRole, SecretKey, bind_amount_token_to_disclosure, bls12_381_public_key_from_did_key,
+        did_key_from_bls12_381_public_key,
+    };
+
+    #[test]
+    fn disclosure_amount_tokens_keep_did_key_format_and_bind_context() {
+        let base_key = SecretKey::key_gen(&[7; 32], &[]).unwrap();
+        let base_token = did_key_from_bls12_381_public_key(&base_key.sk_to_pk().compress());
+        let commitment = "φtrait_00112233445566778899aabbccddeeff00112233";
+        let token = bind_amount_token_to_disclosure(
+            &base_token,
+            commitment,
+            "jurisdiction",
+            DidRole::Participant,
+            0,
+            2,
+        )
+        .unwrap();
+
+        assert!(token.starts_with("did:key:z"));
+        bls12_381_public_key_from_did_key(&token).unwrap();
+        assert_eq!(
+            token,
+            bind_amount_token_to_disclosure(
+                &base_token,
+                commitment,
+                "jurisdiction",
+                DidRole::Participant,
+                0,
+                2,
+            )
+            .unwrap()
+        );
+        assert_ne!(
+            token,
+            bind_amount_token_to_disclosure(
+                &base_token,
+                commitment,
+                "jurisdiction",
+                DidRole::Participant,
+                1,
+                2,
+            )
+            .unwrap()
+        );
+        assert_ne!(
+            token,
+            bind_amount_token_to_disclosure(
+                &base_token,
+                commitment,
+                "jurisdiction",
+                DidRole::Subject,
+                0,
+                2,
+            )
+            .unwrap()
+        );
+    }
 }
