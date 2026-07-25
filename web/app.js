@@ -142,65 +142,46 @@ async function protectTrait(trait, ownerDid, allowVerifiedDowngrade = true) {
   return false;
 }
 
-async function initializeClassifiedInformation() {
-  let changed = false;
-  for (const identity of state.identities) {
-    for (const trait of identity.traits || []) {
-      changed = (await protectTrait(trait, identity.did)) || changed;
+async function hydratePrivateInformation() {
+  let encryptionKey;
+  const hydrate = async (trait) => {
+    if (trait.classification !== "private") return;
+    if (trait.value != null) {
+      privateValueCache.set(privateValueKey(trait), String(trait.value));
+      return;
     }
+    if (!trait.encryptedValue) return;
+    encryptionKey ||= await workspaceEncryptionKey();
+    const plaintext = await decryptPrivateValue(trait.encryptedValue, encryptionKey);
+    privateValueCache.set(privateValueKey(trait), plaintext);
+  };
+
+  for (const identity of state.identities) {
+    for (const trait of identity.traits || []) await hydrate(trait);
   }
   for (const exchange of state.exchanges) {
-    let receiptChanged = false;
-    for (const trait of exchange.disclosures || []) {
-      const signingDid = trait.verification?.did || exchange.sourceDid;
-      receiptChanged = (await protectTrait(trait, signingDid)) || receiptChanged;
-    }
-    if (receiptChanged) {
-      exchange.disclosureCommitment = traitCommitment(exchange.disclosures);
-      exchange.status = "revoked";
-      exchange.revokedAt ||= new Date().toISOString();
-      exchange.signaturesVerified = false;
-      exchange.migrationReason = "Classification protection upgraded";
-      changed = true;
-    }
+    for (const trait of exchange.disclosures || []) await hydrate(trait);
   }
-  if (changed) save();
 }
 
 function loadState() {
+  const serialized = localStorage.getItem(STORAGE_KEY);
   try {
-    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (stored?.version === 1 && Array.isArray(stored.identities)) {
-      const {
-        delegations: _removedDelegations,
-        proofs: _removedProofs,
-        authentications: _removedAuthentications,
-        tokens: _removedTokens,
-        ...storedState
-      } = stored;
-      const migrated = {
-        ...storedState,
-        identities: stored.identities.map((identity) => ({
-          ...identity,
-          traits: (identity.traits || []).map((trait) => ({
-            ...trait,
-            subjectId: trait.subjectId || identity.id,
-            subjectDid: trait.subjectDid || identity.did,
-          })),
-        })),
-        exchanges: (stored.exchanges || []).map((exchange) => ({
-          ...exchange,
-          signaturesVerified: false,
-        })),
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
-      return migrated;
+    if (serialized) {
+      const stored = JSON.parse(serialized);
+      if (
+        stored?.version === 1 &&
+        Array.isArray(stored.identities) &&
+        Array.isArray(stored.exchanges)
+      ) {
+        return stored;
+      }
     }
   } catch {
-    localStorage.removeItem(STORAGE_KEY);
+    // Preserve unreadable storage instead of modifying it during startup.
   }
   const initial = demoState();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+  if (!serialized) localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
   return initial;
 }
 
@@ -1472,9 +1453,9 @@ async function checkRuntime() {
 }
 
 try {
-  await initializeClassifiedInformation();
+  await hydratePrivateInformation();
 } catch (error) {
-  console.error("Information protection initialization failed.", error);
+  console.error("Private information hydration failed.", error);
 }
 render();
 checkRuntime();
