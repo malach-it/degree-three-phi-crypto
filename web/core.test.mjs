@@ -256,6 +256,10 @@ test("trait exchange selectively discloses consented owned information", () => {
   assert.equal(holdings[0].holderId, "member");
   assert.equal(holdings[0].subjectId, "owner");
   assert.equal(holdings[0].trait.value, "FR");
+  assert.equal(
+    holdings[0].amountToken,
+    "participant-amount-token-hop-0",
+  );
   assert.equal(holdings[0].valid, true);
   const forwarded = createForwardExchange({
     parentExchange: exchange,

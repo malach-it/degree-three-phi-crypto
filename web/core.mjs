@@ -549,6 +549,7 @@ export function informationHoldingsFor(
         depth: exchange.depth || 0,
         allowRedisclosure: exchange.allowRedisclosure === true,
         maxDepth: maxDepthFromGroupAmount(exchange.groupAmount) ?? 0,
+        amountToken: exchange.groupReceipt?.participantAmountToken || null,
         valid: validity.valid,
         validityReason: validity.reason,
       }));

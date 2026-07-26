@@ -87,12 +87,44 @@ function tokensFor(identity) {
   });
 }
 
-function informationCard(trait, subjectName, detail, valid = true) {
+function latestSubjectTokenFor(identity, trait) {
+  return state.exchanges
+    .filter(
+      (exchange) =>
+        exchange.sourceId === identity.id &&
+        exchange.status === "accepted" &&
+        exchange.disclosures.some(({ id }) => id === trait.id) &&
+        exchange.groupReceipt?.subjectAmountToken,
+    )
+    .sort(
+      (left, right) =>
+        new Date(right.acceptedAt || right.createdAt).getTime() -
+        new Date(left.acceptedAt || left.createdAt).getTime(),
+    )
+    .map((exchange) => ({
+      token: exchange.groupReceipt.subjectAmountToken,
+      label: "Subject amount token",
+      receiptId: exchange.id,
+    }))[0];
+}
+
+function informationCard(
+  trait,
+  subjectName,
+  detail,
+  valid = true,
+  amountToken = null,
+) {
   return `<article class="information-card">
     <div><span class="tag">About ${escapeHtml(subjectName)}</span><span class="state ${valid ? "" : "invalid"}">${valid ? "active" : "inactive"}</span></div>
     <h3>${escapeHtml(trait.name)}</h3>
     <strong>${escapeHtml(traitValue(trait))}</strong>
     <small>${escapeHtml(detail)}</small>
+    ${
+      amountToken?.token
+        ? `<div class="information-token"><span><small>${escapeHtml(amountToken.label)}</small><code title="${escapeHtml(amountToken.token)}">${escapeHtml(amountToken.token)}</code><em>Receipt ${escapeHtml(amountToken.receiptId)}</em></span><button data-copy="${escapeHtml(amountToken.token)}">Copy</button></div>`
+        : `<div class="information-token empty"><span><small>Amount token</small><em>Issued after an accepted on-chain exchange</em></span></div>`
+    }
   </article>`;
 }
 
@@ -219,7 +251,7 @@ function signingPage(identity, requests) {
               </article>`;
             })
             .join("")}</div>`
-        : `<div class="wallet-empty sign-empty"><span>✓</span><h3>No signatures requested</h3><p>This identity has no pending witness or recipient approvals.</p><a href="/#administration">View Exchange ledger</a></div>`
+        : `<div class="wallet-empty sign-empty"><span>✓</span><h3>No signatures requested</h3><p>This identity has no pending witness or recipient approvals.</p></div>`
     }
   </section>`;
 }
@@ -259,13 +291,16 @@ function render() {
       <div class="information-list">${
         (identity.traits || []).length
           ? identity.traits
-              .map((trait) =>
-                informationCard(
+              .map((trait) => {
+                const amountToken = latestSubjectTokenFor(identity, trait);
+                return informationCard(
                   trait,
                   identityById(trait.subjectId)?.name || "Unknown subject",
                   protectionLabel(trait),
-                ),
-              )
+                  true,
+                  amountToken,
+                );
+              })
               .join("")
           : `<div class="wallet-empty">No directly owned information.</div>`
       }</div>
@@ -280,6 +315,13 @@ function render() {
                   identityById(holding.subjectId)?.name || "Deleted subject",
                   `${holding.purpose} · hop ${holding.depth} · ${holding.valid ? "receipt verified" : holding.validityReason}`,
                   holding.valid,
+                  holding.amountToken
+                    ? {
+                        token: holding.amountToken,
+                        label: "Recipient amount token",
+                        receiptId: holding.exchangeId,
+                      }
+                    : null,
                 ),
               )
               .join("")
